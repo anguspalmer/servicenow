@@ -7,6 +7,7 @@
     "axios": "^0.18.0",
     "backo": "^1.1.0",
     "cache": "git+ssh://git@git.ac3.com.au:7999/node/cache.git",
-    "xml2js": "^0.4.19"
+    "xml2js": "^0.4.19",
+    "sync": "git+ssh://git@git.ac3.com.au:7999/node/sync.git"
   }
 }

@@ -21,8 +21,8 @@ const API_CONCURRENCY = 40;
  * Allows renaming of fields.
  * @example
  * let snc = new ServiceNowClient({
- *     user: "foo",
- *     pass: "bar",
+ *     username: "foo",
+ *     password: "bar",
  *     instance: "ac3dev"
  *   });
  *   let results = await snc.get("u_commvault_products")
