@@ -1,0 +1,12 @@
+{
+  "name": "servicenow",
+  "version": "0.1.0",
+  "private": true,
+  "main": "client.js",
+  "dependencies": {
+    "axios": "^0.18.0",
+    "backo": "^1.1.0",
+    "cache": "git+ssh://git@git.ac3.com.au:7999/node/cache.git",
+    "xml2js": "^0.4.19"
+  }
+}
