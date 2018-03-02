@@ -91,6 +91,10 @@ module.exports = class ServiceNowClient {
     if (resp.status !== 200) {
       throw `GET schema failed: ${resp.statusText}`;
     }
+    let contentType = resp.headers["content-type"];
+    if (contentType !== "text/xml") {
+      throw `GET schema failed: non-xml content type (${contentType})`;
+    }
     let schema = await parseXML(resp.data);
     let elements = prop(schema, tableName, "element");
     if (!Array.isArray(elements)) {
@@ -136,6 +140,13 @@ module.exports = class ServiceNowClient {
     });
     return columns;
   }
+
+  /**
+   * Returns the table info for the given table.
+   * Like a more detailed schema.
+   * @param {string} tableName
+   */
+  async getTableInfo(tableName) {}
 
   /**
    * Returns an array of json objects using the ServiceNow Table API
