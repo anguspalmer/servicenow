@@ -11,7 +11,9 @@ const Backoff = require("backo");
 const xml2js = require("xml2js");
 const parseXML = sync.promisify(xml2js.parseString);
 
+const ServiceNowClientTable = require("./client-table");
 const fakeApi = require("./fake-api");
+const { prop, createRowHash } = require("./util");
 const API_CONCURRENCY = 40;
 
 /**
@@ -43,6 +45,7 @@ module.exports = class ServiceNowClient {
     this.defaultParams = {
       sysparm_exclude_reference_link: true
     };
+    this.enableCache = config.cache === true;
     this.fake = fake;
     this.api = fake
       ? fakeApi
@@ -54,6 +57,7 @@ module.exports = class ServiceNowClient {
           },
           validateStatus: () => true
         });
+    this.table = new ServiceNowClientTable(this);
   }
 
   /**
@@ -101,6 +105,9 @@ module.exports = class ServiceNowClient {
       throw `GET schema failed: expected array of columns`;
     }
     let columns = {};
+    elements.sort((a, b) => {
+      return a.$.name < b.$.name ? -1 : 1;
+    });
     elements.forEach(elem => {
       let attrs = elem.$;
       //require name and type
@@ -115,15 +122,6 @@ module.exports = class ServiceNowClient {
       }
       col.type = attrs.internal_type;
       delete attrs.internal_type;
-      //optional max length, with validation
-      if (attrs.max_length) {
-        let l = parseInt(attrs.max_length, 10);
-        if (isNaN(l)) {
-          throw `Invalid max length`;
-        }
-        col.maxLength = l;
-        delete attrs.max_length;
-      }
       //copy over rest
       for (let k in attrs) {
         let v = attrs[k];
@@ -140,13 +138,6 @@ module.exports = class ServiceNowClient {
     });
     return columns;
   }
-
-  /**
-   * Returns the table info for the given table.
-   * Like a more detailed schema.
-   * @param {string} tableName
-   */
-  async getTableInfo(tableName) {}
 
   /**
    * Returns an array of json objects using the ServiceNow Table API
@@ -201,15 +192,18 @@ module.exports = class ServiceNowClient {
     if (query) {
       params.sysparm_query = query;
     }
-    // Update Cache if we got data, fetch from cache if we didn't
-    let cacheKey = `${tableName}-${md5(JSON.stringify([columns, query]))}`;
     // Response data
-    // Attempt to load cached data.
-    let data = await cache.get(cacheKey, this.fake ? null : "1s");
-    if (data) {
-      // Successfully loaded from cache
-      this.log(`Using local cache of ${tableName}`);
-      return data;
+    let data;
+    // Attempt to load cached data?
+    let cacheKey;
+    if (this.enableCache) {
+      cacheKey = `${tableName}-${md5(JSON.stringify([columns, query]))}`;
+      data = await cache.get(cacheKey, this.fake ? null : "1s");
+      if (data) {
+        // Successfully loaded from cache
+        this.log(`Using local cache of ${tableName}`);
+        return data;
+      }
     }
     // Count number of records
     const count = await this.getCount(tableName);
@@ -280,7 +274,7 @@ module.exports = class ServiceNowClient {
       });
     }
     // Cache for future
-    if (data && data.length > 0) {
+    if (this.enableCache && data && data.length > 0) {
       await cache.put(cacheKey, data);
     }
     return data;
@@ -694,78 +688,4 @@ module.exports = class ServiceNowClient {
   log(...args) {
     console.log("[snc]", ...args);
   }
-};
-
-const prop = (obj, ...path) => {
-  let o = obj;
-  for (let i = 0; i < path.length; i++) {
-    let k = path[i];
-    if (o && typeof o === "object" && k in o) {
-      o = o[k];
-    } else {
-      return undefined;
-    }
-  }
-  return o;
-};
-
-const createRowHash = schema => {
-  return row => {
-    // let debug =
-    //   row.u_correlation_id ===
-    //   "110-2000|6000C29c-2306-5620-4593-0c916aa61136|502990c1-807a-63ae-6bb0-0eab061ecb3e";
-    // if (debug) console.log("DEBUG");
-    let h = crypto.createHash("md5");
-    for (let col in schema) {
-      //only compare user fields
-      //TODO use col in firstRow instead?
-      if (!/^u_/.test(col)) {
-        continue;
-      }
-      let spec = schema[col];
-      let value = row[col];
-      if (value === "" || value === null || value === undefined) {
-        //s-now api returns "" for all null / empty / blank fields
-        //so we must hash of these to blank
-        value = ``;
-      } else if (spec.type === "boolean") {
-        //needs converting
-        if (typeof value === "string") {
-          value = value === "true";
-        } else if (typeof value === "number") {
-          value = value === 1;
-        }
-        //s-now api returns booleans as 1 or 0
-        value = `"${value ? 1 : 0}"`;
-      } else {
-        //number needs rounding before converting
-        if (typeof value === "number") {
-          if (spec.type === "decimal") {
-            value = Math.round(value * 100) / 100; //2 places
-          } else if (spec.type === "integer") {
-            value = Math.round(value);
-          }
-        }
-        //swap out all fancy characters
-        value = String(value).replace(/[^A-Za-z0-9\-\_]/g, "_");
-        //trim length
-        if (
-          spec.type === "string" &&
-          spec.maxLength &&
-          value.length > spec.maxLength
-        ) {
-          console.log(
-            `<WARN> Truncated column ${col} with length  ${value.length}`
-          );
-          value = value.slice(0, spec.maxLength);
-        }
-        //quote
-        value = `"${value}"`;
-      }
-      let segment = `${col}=${value}`;
-      // if (debug) console.log(segment);
-      h.update(segment);
-    }
-    return h.digest("hex");
-  };
 };
