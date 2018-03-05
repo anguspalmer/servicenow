@@ -13,7 +13,7 @@ const parseXML = sync.promisify(xml2js.parseString);
 
 const ServiceNowClientTable = require("./client-table");
 const fakeApi = require("./fake-api");
-const { prop, createRowHash } = require("./util");
+const { prop, createRowHash, isGUID } = require("./util");
 const API_CONCURRENCY = 40;
 
 /**
@@ -46,6 +46,7 @@ module.exports = class ServiceNowClient {
       sysparm_exclude_reference_link: true
     };
     this.enableCache = config.cache === true;
+    this.enableDebug = config.debug === true;
     this.fake = fake;
     this.api = fake
       ? fakeApi
@@ -62,6 +63,14 @@ module.exports = class ServiceNowClient {
 
   /**
    * Wraps axios to provide service now improvements.
+   * Features:
+   * - URL validation
+   * - Backoff retries when server overloaded
+   * - Error message extraction
+   * - Content type validation
+   * - Auto XML parsing
+   * - Response data type validation
+   * - TODO Response table schema validation
    * @param {object} request axios request object
    */
   async do(request) {
@@ -74,20 +83,34 @@ module.exports = class ServiceNowClient {
     if (!url) {
       throw `Missing URL`;
     }
-    //validate URL
-    let m = url.match(
-      /\/v\d\/(import|table|stats|attachment)\/(\w+)(\/([a-f0-9]{32}))?/
+    //validate URL (must use versioned api)
+    let hasData = Boolean(request.data);
+    let isXML = /\.do\b/.test(url);
+    let isValidJSONURL = /\/v\d\/(import|table|stats|attachment)\/(\w+)(\/(\w+))?$/.test(
+      url
     );
-    if (!m) {
+    let isRead = method === "GET";
+    let isWrite = !isRead;
+    let apiType = RegExp.$1;
+    let tableAPI = apiType === "table";
+    let importAPI = apiType === "import";
+    let tableName = RegExp.$2;
+    let sysID = RegExp.$4;
+    //validate inputs
+    if (sysID && !isGUID(sysID)) {
+      throw `Invalid URL sys_id`;
+    }
+    if (!sysID && tableAPI && (method === "PUT" || method === "DELETE")) {
+      throw `Expected sys ID in URL`;
+    }
+    let isArray = !sysID;
+    let isJSON = !isXML;
+    if (isJSON && !isValidJSONURL) {
       throw `Invalid URL`;
     }
-    let apiType = m[1];
-    let tableName = m[2];
-    let guid = m[3];
-    let isRead = method === "GET";
-    let isArray = !m[3];
-    let isXML = /\.do\b/.test(url);
-    let isJSON = !isXML;
+    if (importAPI && !/^u_imp_dm_/.test(tableName)) {
+      throw `Invalid import table specified (${tableName})`;
+    }
     //do request!
     let resp;
     //with retries
@@ -131,8 +154,15 @@ module.exports = class ServiceNowClient {
       }
       attempt++;
     }
+    //request has no data
+    if (resp.status === 204 || resp.status === 201) {
+      return true;
+    }
     //got response
     let { data } = resp;
+    if (!data) {
+      throw `Expected response data`;
+    }
     //validate type
     let contentType = resp.headers["content-type"];
     if (isXML && !contentType.startsWith("text/xml")) {
@@ -148,20 +178,17 @@ module.exports = class ServiceNowClient {
     if (data && data.error && data.error.message) {
       throw `${method} "${tableName}" failed: ${data.error.message}`;
     }
-    if (resp.status === 204 || resp.status === 201) {
-      return true; //no data
-    } else if (!data) {
-      throw `Expected response data`;
-    }
     //generic error (should not happen...)
     if (resp.status !== 200) {
       throw `${method} "${tableName}" failed: ${resp.statusText}`;
     }
+    //XML data
     if (isXML) {
       return data;
     }
+    //JSON data always has "result"
     let { result } = data;
-    if (isRead && isArray && !Array.isArray(result)) {
+    if (tableAPI && isRead && isArray && !Array.isArray(result)) {
       throw `Expected array result`;
     }
     //TODO validate schema for table
@@ -172,19 +199,20 @@ module.exports = class ServiceNowClient {
    * Returns the number of rows in the given table.
    * @param {string} tableName
    */
-  async getCount(tableName) {
-    let data = await this.do({
+  async getCount(tableName, query) {
+    let result = await this.do({
       method: "GET",
       url: `/v1/stats/${tableName}`,
       params: {
-        sysparm_count: true
+        sysparm_count: true,
+        sysparm_query: query
       }
     });
-    let count = prop(data, "data", "result", "stats", "count");
+    let count = prop(result, "stats", "count");
     if (!/^\d+$/.test(count)) {
       throw `Invalid count response`;
     }
-    return parseInt(count);
+    return parseInt(count, 10);
   }
 
   /**
@@ -303,7 +331,7 @@ module.exports = class ServiceNowClient {
       }
     }
     // Count number of records
-    const count = await this.getCount(tableName);
+    const count = await this.getCount(tableName, query);
     if (count > 100000) {
       //never collect more than 100k to prevent memory-crashes
       if (status) status.warn("found over 100k rows");
@@ -361,10 +389,10 @@ module.exports = class ServiceNowClient {
    * @param {object} row The target object.
    */
   async import(tableName, row) {
-    return await this.call({
-      action: "import",
-      tableName,
-      row
+    return await this.do({
+      method: "POST",
+      url: `/v1/import/${tableName}`,
+      data: row
     });
   }
   /**
@@ -373,10 +401,10 @@ module.exports = class ServiceNowClient {
    * @param {object} row The target object.
    */
   async create(tableName, row) {
-    return await this.call({
-      action: "create",
-      tableName,
-      row
+    return await this.do({
+      method: "POST",
+      url: `/v2/table/${tableName}`,
+      data: row
     });
   }
 
@@ -386,10 +414,13 @@ module.exports = class ServiceNowClient {
    * @param {object} row The target object.
    */
   async update(tableName, row) {
-    return await this.call({
-      action: "update",
-      tableName,
-      row
+    if (!row.sys_id) {
+      throw `row requires "sys_id"`;
+    }
+    return await this.do({
+      method: "PUT",
+      url: `/v2/table/${tableName}/${row.sys_id}`, //sys_id will be extracted from row
+      data: row
     });
   }
 
@@ -399,64 +430,12 @@ module.exports = class ServiceNowClient {
    * @param {object} row The target object.
    */
   async delete(tableName, row) {
-    return await this.call({
-      action: "delete",
-      tableName,
-      row
-    });
-  }
-
-  /**
-   * call the table or import API
-   * @param {object} config The call configuration object.
-   */
-  async call(config) {
-    //pull variables
-    let { tableName, row, action } = config;
-    let doImport = action === "import";
-    let doCreate = action === "create";
-    let doUpdate = action === "update";
-    let doDelete = action === "delete";
-    //validate variables
-    if (!tableName) {
-      throw "No table specified";
-    } else if (!row || typeof row !== "object") {
-      throw `Row must be an object`;
+    if (!row.sys_id) {
+      throw `row requires "sys_id"`;
     }
-    if (!/^u_(imp_)?dm_/.test(tableName)) {
-      throw `Invalid table specified (${tableName})`;
-    }
-    let importTable = Boolean(RegExp.$1);
-    if ((doCreate || doUpdate) && importTable) {
-      throw `Expected "u_dm_..." table`; //get/delete okay
-    } else if (doImport && !importTable) {
-      throw `Expected "u_imp_dm_..." table`;
-    }
-    let hasSysId = Boolean(row.sys_id);
-    if ((doUpdate || doDelete) && !hasSysId) {
-      throw `row is missing sys_id`;
-    }
-    let method, url;
-    if (doImport) {
-      method = "POST";
-      url = `v1/import/${tableName}`;
-    } else if (doUpdate) {
-      method = "PUT";
-      url = `/v2/table/${tableName}/${row.sys_id}`;
-    } else if (doDelete) {
-      method = "DELETE";
-      url = `/v2/table/${tableName}/${row.sys_id}`;
-    } else if (doCreate) {
-      method = "POST";
-      url = `/v2/table/${tableName}`;
-    } else {
-      throw `Invalid action (${action})`;
-    }
-    //ready!
     return await this.do({
-      method,
-      url,
-      data: method === "DELETE" ? undefined : row
+      method: "DELETE",
+      url: `/v2/table/${tableName}/${row.sys_id}`
     });
   }
 
@@ -733,5 +712,11 @@ module.exports = class ServiceNowClient {
 
   log(...args) {
     console.log("[snc]", ...args);
+  }
+
+  debug(...args) {
+    if (this.enableDebug) {
+      this.log(...args);
+    }
   }
 };

@@ -108,6 +108,13 @@ exports.sn2js = (schema, row) => {
         throw `Invalid integer "${v}"`;
       }
       v = i;
+    } else if (t === "float" || t === "decimal") {
+      let i = parseFloat(v, 10);
+      if (isNaN(i)) {
+        throw `Invalid float/decimal "${v}"`;
+      }
+      v = i;
+      3;
     } else if (t === "glide_date_time") {
       if (!/^(\d\d\d\d-\d\d-\d\d) (\d\d:\d\d:\d\d)$/.test(v)) {
         throw `Unexpected date format "${v}"`;
@@ -167,10 +174,12 @@ exports.js2sn = (schema, obj) => {
       }
       //servicenow api returns booleans as 1 or 0
       v = `"${v ? 1 : 0}"`;
-    } else if (t === "decimal") {
+    } else if (t === "decimal" || t === "float") {
       if (typeof v === "number") {
         throw `Invalid number v: ${v}`;
       }
+      // let places = 2
+      //TODO calc number of places, scope
       v = Math.round(v * 100) / 100; //2 places
     } else if (t === "integer") {
       if (typeof v === "number") {
@@ -192,3 +201,16 @@ exports.js2sn = (schema, obj) => {
 };
 
 exports.isGUID = str => /^[a-f0-9]{32}$/.test(str);
+
+exports.titlize = slug => {
+  return slug
+    .replace(/^u_/, "")
+    .split("_")
+    .map(p => {
+      let t = p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
+      //TODO lookup dictionary for short words, not-exist? uppercase
+      t = t.replace(/\b(ip|api|guid|uuid|id|vm)\b/gi, s => s.toUpperCase());
+      return t;
+    })
+    .join(" ");
+};
