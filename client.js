@@ -61,21 +61,126 @@ module.exports = class ServiceNowClient {
   }
 
   /**
+   * Wraps axios to provide service now improvements.
+   * @param {object} request axios request object
+   */
+  async do(request) {
+    let { method, url } = request;
+    if (!method) {
+      method = "GET";
+    } else {
+      method = method.toUpperCase();
+    }
+    if (!url) {
+      throw `Missing URL`;
+    }
+    //validate URL
+    let m = url.match(
+      /\/v\d\/(import|table|stats|attachment)\/(\w+)(\/([a-f0-9]{32}))?/
+    );
+    if (!m) {
+      throw `Invalid URL`;
+    }
+    let apiType = m[1];
+    let tableName = m[2];
+    let guid = m[3];
+    let isRead = method === "GET";
+    let isArray = !m[3];
+    let isXML = /\.do\b/.test(url);
+    let isJSON = !isXML;
+    //do request!
+    let resp;
+    //with retries
+    let backoff,
+      attempt = 0;
+    while (true) {
+      //retry attempts must be delayed
+      if (attempt > 0) {
+        //service-now overloaded currently...
+        if (attempt === 3) {
+          throw `Too many retries`;
+        }
+        //initialise backoff timer
+        if (!backoff) {
+          backoff = new Backoff({
+            min: 1000,
+            max: 30000,
+            jitter: 0.5,
+            factor: 3
+          });
+        }
+        let d = backoff.duration();
+        await sync.sleep(d);
+      }
+      //perform HTTP request, determine if we can rety
+      let retry = false;
+      try {
+        this.log(`do: ${method} ${url}...`);
+        resp = await this.api(request);
+      } catch (err) {
+        //tcp disconnected, retry
+        if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN") {
+          retry = true;
+        }
+      }
+      if (resp.status === 429) {
+        retry = true;
+      }
+      if (!retry) {
+        break;
+      }
+      attempt++;
+    }
+    //got response
+    let { data } = resp;
+    //validate type
+    let contentType = resp.headers["content-type"];
+    if (isXML && !contentType.startsWith("text/xml")) {
+      throw `Expected XML (got ${contentType})`;
+    } else if (isJSON && !contentType.startsWith("application/json")) {
+      throw `Expected JSON (got ${contentType})`;
+    }
+    //auto-parse xml
+    if (isXML) {
+      data = await parseXML(data);
+    }
+    //check for errors
+    if (data && data.error && data.error.message) {
+      throw `${method} "${tableName}" failed: ${data.error.message}`;
+    }
+    if (resp.status === 204 || resp.status === 201) {
+      return true; //no data
+    } else if (!data) {
+      throw `Expected response data`;
+    }
+    //generic error (should not happen...)
+    if (resp.status !== 200) {
+      throw `${method} "${tableName}" failed: ${resp.statusText}`;
+    }
+    if (isXML) {
+      return data;
+    }
+    let { result } = data;
+    if (isRead && isArray && !Array.isArray(result)) {
+      throw `Expected array result`;
+    }
+    //TODO validate schema for table
+    return result;
+  }
+
+  /**
    * Returns the number of rows in the given table.
    * @param {string} tableName
    */
   async getCount(tableName) {
-    let resp = await this.api({
+    let data = await this.do({
       method: "GET",
       url: `/v1/stats/${tableName}`,
       params: {
         sysparm_count: true
       }
     });
-    if (resp.status !== 200) {
-      throw `GET count failed: ${resp.statusText})`;
-    }
-    let count = prop(resp, "data", "result", "stats", "count");
+    let count = prop(data, "data", "result", "stats", "count");
     if (!/^\d+$/.test(count)) {
       throw `Invalid count response`;
     }
@@ -87,19 +192,11 @@ module.exports = class ServiceNowClient {
    * @param {string} tableName
    */
   async getSchema(tableName) {
-    let resp = await this.api({
+    let schema = await this.do({
       method: "GET",
       baseURL: `https://${this.instance}.service-now.com/`,
       url: `${tableName}.do?SCHEMA`
     });
-    if (resp.status !== 200) {
-      throw `GET schema failed: ${resp.statusText}`;
-    }
-    let contentType = resp.headers["content-type"];
-    if (contentType !== "text/xml") {
-      throw `GET schema failed: non-xml content type (${contentType})`;
-    }
-    let schema = await parseXML(resp.data);
     let elements = prop(schema, tableName, "element");
     if (!Array.isArray(elements)) {
       throw `GET schema failed: expected array of columns`;
@@ -225,39 +322,17 @@ module.exports = class ServiceNowClient {
         `GET #${count} records from "${tableName}" (page ${page +
           1}/${totalPages})`
       );
-      let resp;
-      try {
-        resp = await this.api({
-          method: "GET",
-          url: `/v2/table/${tableName}`,
-          params: {
-            ...params,
-            sysparm_limit: limit,
-            sysparm_offset: page * limit
-          }
-        });
-      } catch (err) {
-        //request failed to send
-        throw `GET ${tableName} failed: ${err}`;
-      }
-      //throw the provided error
-      let err = prop(resp, "data", "error", "message");
-      if (err) {
-        throw `GET ${tableName} failed: ${err}`;
-      }
-      //throw generic error
-      if (resp.status !== 200) {
-        // this.log(resp.data);
-        throw `GET ${tableName} failed: status ${resp.status} (${
-          resp.statusText
-        })`;
-      }
-      let d = prop(resp, "data", "result");
-      if (!Array.isArray(d)) {
-        throw `GET ${tableName} failed: invalid result`;
-      }
-      if (status) status.done(d.length);
-      return d;
+      let results = await this.do({
+        method: "GET",
+        url: `/v2/table/${tableName}`,
+        params: {
+          ...params,
+          sysparm_limit: limit,
+          sysparm_offset: page * limit
+        }
+      });
+      if (status) status.done(results.length);
+      return results;
     });
     // join all parts
     data = [].concat(...datas);
@@ -377,41 +452,12 @@ module.exports = class ServiceNowClient {
     } else {
       throw `Invalid action (${action})`;
     }
-    let data = method === "DELETE" ? undefined : row;
-    //try 3 times!
-    let b = new Backoff({ min: 1000, max: 30000, jitter: 0.5, factor: 3 });
-    for (let attempt = 0; attempt < 3; attempt++) {
-      //attempt...
-      let response;
-      try {
-        response = await this.api({
-          method,
-          url,
-          data
-        });
-      } catch (err) {
-        //tcp disconnected, retry
-        if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN") {
-          await sync.sleep(b.duration());
-          continue;
-        }
-        //another error...
-        throw `API call failed: ${err}`;
-        break;
-      }
-      //rate-limited, retry....
-      if (response.status === 429) {
-        await sync.sleep(b.duration());
-        continue;
-      }
-      //got a response
-      let successStatus = doUpdate ? 200 : doDelete ? 204 : 201;
-      if (response.status !== successStatus) {
-        throw `Status ${response.status}`;
-      }
-      return response.data;
-    }
-    throw `Too many retries`;
+    //ready!
+    return await this.do({
+      method,
+      url,
+      data: method === "DELETE" ? undefined : row
+    });
   }
 
   /**

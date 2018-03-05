@@ -13,7 +13,11 @@ exports.prop = (obj, ...path) => {
 
 exports.one = arr => {
   if (!Array.isArray(arr)) {
-    throw `Expected array`;
+    let obj = arr;
+    if (!obj || typeof obj !== "object") {
+      throw `Expected object`;
+    }
+    return obj;
   }
   if (arr.length === 0) {
     return null; //no result
@@ -186,3 +190,5 @@ exports.js2sn = (schema, obj) => {
   }
   return row;
 };
+
+exports.isGUID = str => /^[a-f0-9]{32}$/.test(str);
