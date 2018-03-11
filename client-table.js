@@ -1,14 +1,13 @@
 const sync = require("sync");
 
 const { cache } = require("cache");
-const { one, sn2js, isGUID, titlize } = require("./util");
+const { one, isGUID, titlize } = require("./util");
 
 //split out table editing functionality
 module.exports = class ServiceNowClientTable {
   constructor(client) {
     this.client = client;
-    this.infoSchemas = null;
-    this.get = cache.wrap(this, "get", "1s");
+    // this.get = cache.wrap(this, "get", "1s");
   }
 
   /**
@@ -57,16 +56,18 @@ module.exports = class ServiceNowClientTable {
           let v = raw[k];
           //exclude some
           if (
+            //exlude all sys except id/created/updated
             (k !== "sys_created_by" &&
               k !== "sys_updated_by" &&
               k !== "sys_id" &&
+              k !== "sys_class_name" &&
               k.startsWith("sys_")) ||
             (k === "active" && v === true) ||
             k === "calculation" ||
             k === "attributes" ||
-            k === "element" /*already included as id*/ ||
+            k === "element" /*included as id*/ ||
+            k === "column_label" /*included as label*/ ||
             k === "name" /*table name*/ ||
-            k === "column_label" ||
             (k === "use_reference_qualifier" && v === "simple") ||
             (k === "choice" && v === 0) ||
             (typeof v === "string" && v.startsWith("javascript:"))
@@ -130,16 +131,7 @@ module.exports = class ServiceNowClientTable {
       url: `/v2/table/sys_dictionary`,
       params: { sysparm_query: `name=${table.name}` }
     });
-    //get schema's schema
-    if (!this.infoSchemas) {
-      let [table, column] = await sync.wait(true, [
-        this.client.getSchema("sys_db_object"),
-        this.client.getSchema("sys_dictionary")
-      ]);
-      this.infoSchemas = { table, column };
-    }
     //validate table schema
-    table = sn2js(this.infoSchemas.table, table);
     let columns = {};
     columnList.forEach(c => {
       //skip null columns (seem to be "collection")
@@ -152,7 +144,7 @@ module.exports = class ServiceNowClientTable {
         throw `Expected "element" property to be set`;
       }
       //validate column schema
-      columns[id] = sn2js(this.infoSchemas.column, c);
+      columns[id] = c;
     });
     table.columns = columns;
     //recurse into superclass
@@ -235,50 +227,7 @@ module.exports = class ServiceNowClientTable {
     if (!opts || typeof opts !== "object") {
       opts = {};
     }
-    let { servicenow, columns } = spec;
-    //expand string
-    if (typeof servicenow === "string") {
-      servicenow = { id: servicenow };
-    }
-    //extract JS columns
-    let incoming = {};
-    for (let id in columns) {
-      let c = columns[id];
-      //expand type
-      if (typeof c !== "object") {
-        c = { type: c };
-      }
-      //extract column info
-      let { type, servicenow = {} } = c;
-      //convert function (sequelize type class) to string
-      if (typeof type === "function") {
-        let t = type;
-        if (t.key) {
-          type = t.key;
-        } else {
-          type = t.name;
-        }
-      }
-      if (typeof type !== "string") {
-        throw `Expected string type on column "${id}"`;
-      }
-      type = type.toLowerCase();
-      if (typeof type !== "string") {
-        throw `Column (${id}) type must be a string`;
-      }
-      //expand column label
-      if (typeof servicenow === "string") {
-        servicenow = { name: servicenow };
-      }
-      let { name = `u_${id}`, label = titlize(name) } = servicenow;
-      //convert to service-now form
-      incoming[name] = snColumn({
-        id,
-        name,
-        type,
-        label
-      });
-    }
+
     //fetch and validate servicenow columns
     let table = await this.get(servicenow.id);
     let existing = table.columns;
@@ -288,7 +237,8 @@ module.exports = class ServiceNowClientTable {
       let col = incoming[k];
       let { id, name } = col;
       if (id !== name && id in existing) {
-        throw `Column "${id}" already exists but attempting to create as "${name}"`;
+        throw `Column "${id}" already exists on "${table.name}" but ` +
+          `attempting to create as "${name}"`;
       }
       if (name in existing) {
         //compare type and max_length
@@ -302,6 +252,11 @@ module.exports = class ServiceNowClientTable {
           if (k in col && col[k] !== ecol[k]) {
             update = true;
             updates[k] = col[k];
+          }
+        }
+        for (let k of ["type", "referenceTable"]) {
+          if (k in col && col[k] !== ecol[k]) {
+            throw `Column "${k}" differs, however it cannot be updated`;
           }
         }
         if (update) {
@@ -350,42 +305,4 @@ module.exports = class ServiceNowClientTable {
   debug(...args) {
     this.client.debug(...args);
   }
-};
-
-//converts a JS column into a SN column
-const snColumn = col => {
-  let { name, label, type, max_length } = col;
-  if (!name) {
-    throw `Missing column name`;
-  }
-  if (!label) {
-    label = titlize(name);
-  }
-  let default_length = 40;
-  switch (type) {
-    case "text":
-      default_length = 65000;
-      break;
-    case "string":
-      default_length = 255;
-      break;
-    case "integer":
-    case "float":
-    case "decimal":
-      break;
-    case "date":
-      type = "glide_date_time";
-      break;
-    default:
-      throw `Unknown column type "${type}"`;
-  }
-  if (!max_length) {
-    max_length = default_length;
-  }
-  return {
-    name,
-    label,
-    type,
-    max_length
-  };
 };

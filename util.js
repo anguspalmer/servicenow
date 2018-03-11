@@ -47,7 +47,7 @@ exports.createRowHash = schema => {
     //   "110-2000|6000C29c-2306-5620-4593-0c916aa61136|502990c1-807a-63ae-6bb0-0eab061ecb3e";
     // if (debug) console.log("DEBUG");
     let h = crypto.createHash("md5");
-    let row = exports.js2sn(obj);
+    let row = exports.convertJS(obj);
     for (let col in schema) {
       //only compare user fields
       //TODO use col in firstRow instead?
@@ -58,11 +58,8 @@ exports.createRowHash = schema => {
       let value = row[col];
       //swap out all fancy characters
       value = String(value).replace(/[^A-Za-z0-9\-\_]/g, "_");
-
-      //quote
-      value = `"${value}"`;
-
-      let segment = `${col}=${value}`;
+      //
+      let segment = `${col}="${value}"`;
       // if (debug) console.log(segment);
       h.update(segment);
     }
@@ -70,15 +67,13 @@ exports.createRowHash = schema => {
   };
 };
 
-exports.sn2js = (schema, row) => {
+exports.convertJS = (schema, row) => {
   if (!schema) {
     throw `Missing schema`;
   }
   //run against all elements
   if (Array.isArray(row)) {
-    return row.map(r => {
-      this.sn2js(schema, r);
-    });
+    return row.map(r => this.convertJS(schema, r));
   }
   //must be an object
   if (!row || typeof row !== "object") {
@@ -128,6 +123,7 @@ exports.sn2js = (schema, row) => {
     } else if (t === "string") {
       //noop
     } else {
+      // NOTE: objects (link+value) are left untouched
       // console.log("CONVERT", v, "TO", t);
     }
     obj[k] = v;
@@ -135,14 +131,14 @@ exports.sn2js = (schema, row) => {
   return obj;
 };
 
-exports.js2sn = (schema, obj) => {
+exports.convertSN = (schema, obj) => {
   if (!schema) {
     throw `Missing schema`;
   }
   //run against all elements
   if (Array.isArray(obj)) {
     return obj.map(o => {
-      this.sn2js(schema, o);
+      this.convertSN(schema, o);
     });
   }
   //must be an object
@@ -163,17 +159,16 @@ exports.js2sn = (schema, obj) => {
       //servicenow api returns "" for all null / empty / blank fields
       v = "";
     } else if (t === "boolean") {
-      if (typeof v === "boolean") {
-        //noop;
-      } else if (typeof v === "string") {
+      if (typeof v === "string") {
         v = v === "true";
       } else if (typeof v === "number") {
         v = v === 1;
-      } else {
+      }
+      if (typeof v !== "boolean") {
         throw `Invalid boolean v: ${v}`;
       }
       //servicenow api returns booleans as 1 or 0
-      v = `"${v ? 1 : 0}"`;
+      v = `${v ? 1 : 0}`;
     } else if (t === "decimal" || t === "float") {
       if (typeof v === "number") {
         throw `Invalid number v: ${v}`;
@@ -185,7 +180,7 @@ exports.js2sn = (schema, obj) => {
       if (typeof v === "number") {
         throw `Invalid number v: ${v}`;
       }
-      v = Math.round(v);
+      v = `${Math.round(v)}`;
     } else if (t == "string") {
       //trim length
       if (s.maxLength && v.length > s.maxLength) {

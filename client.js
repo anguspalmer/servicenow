@@ -13,8 +13,9 @@ const parseXML = sync.promisify(xml2js.parseString);
 
 const ServiceNowClientTable = require("./client-table");
 const fakeApi = require("./fake-api");
-const { prop, createRowHash, isGUID } = require("./util");
+const { convertJS, prop, one, createRowHash, isGUID } = require("./util");
 const API_CONCURRENCY = 40;
+const EXPIRES_AT = Symbol();
 
 /**
  * @class
@@ -23,13 +24,13 @@ const API_CONCURRENCY = 40;
  * Allows renaming of fields.
  * @example
  * let snc = new ServiceNowClient({
- *     user: "foo",
- *     pass: "bar",
- *     instance: "ac3dev"
- *   });
- *   let results = await snc.get("u_commvault_products")
+ *   user: "foo",
+ *   pass: "bar",
+ *   instance: "ac3dev"
+ * });
+ * let results = await snc.get("u_commvault_products")
  */
-module.exports = class ServiceNowClient {
+class ServiceNowClient {
   constructor(config) {
     //validate config
     let { username, password, instance } = config;
@@ -58,7 +59,9 @@ module.exports = class ServiceNowClient {
           },
           validateStatus: () => true
         });
+    this.username = username;
     this.table = new ServiceNowClientTable(this);
+    this.schemaCache = {};
   }
 
   /**
@@ -191,8 +194,29 @@ module.exports = class ServiceNowClient {
     if (tableAPI && isRead && isArray && !Array.isArray(result)) {
       throw `Expected array result`;
     }
-    //TODO validate schema for table
+    //table api results? use schema to convert to JS types
+    if (tableAPI && tableName) {
+      let schema = await this.getSchema(tableName);
+      result = convertJS(schema, result);
+    }
+    //done!
     return result;
+  }
+
+  /**
+   * Returns the number of rows in the given table.
+   * @param {string} tableName
+   */
+  async getUser() {
+    let result = await this.do({
+      method: "GET",
+      url: `/v1/table/sys_user`,
+      params: {
+        sysparm_query: `user_name=${this.username}`
+      }
+    });
+    let user = one(result);
+    return user;
   }
 
   /**
@@ -208,6 +232,7 @@ module.exports = class ServiceNowClient {
         sysparm_query: query
       }
     });
+    console.log(result);
     let count = prop(result, "stats", "count");
     if (!/^\d+$/.test(count)) {
       throw `Invalid count response`;
@@ -219,17 +244,38 @@ module.exports = class ServiceNowClient {
    * Returns the schema of the given table.
    * @param {string} tableName
    */
-  async getSchema(tableName) {
-    let schema = await this.do({
+  async getSchema(tableName, invalidate = false) {
+    //force remove cache
+    if (invalidate) {
+      delete this.schemaCache[tableName];
+    }
+    //attempt to load from cache
+    if (tableName in this.schemaCache) {
+      let schema = this.schemaCache[tableName];
+      //inflight? wait and re-load from cache
+      if (schema instanceof Promise) {
+        await schema;
+        schema = this.schemaCache[tableName];
+      }
+      if (+new Date() < schema[EXPIRES_AT]) {
+        return schema;
+      }
+      delete this.schemaCache[tableName];
+    }
+    //mark get-schema as inflight, others following must wait!
+    let done;
+    this.schemaCache[tableName] = new Promise(d => (done = d));
+    //load from servicenow
+    let resp = await this.do({
       method: "GET",
       baseURL: `https://${this.instance}.service-now.com/`,
       url: `${tableName}.do?SCHEMA`
     });
-    let elements = prop(schema, tableName, "element");
+    let elements = prop(resp, tableName, "element");
     if (!Array.isArray(elements)) {
       throw `GET schema failed: expected array of columns`;
     }
-    let columns = {};
+    let schema = {};
     elements.sort((a, b) => {
       return a.$.name < b.$.name ? -1 : 1;
     });
@@ -259,9 +305,14 @@ module.exports = class ServiceNowClient {
         }
         col[k] = v;
       }
-      columns[col.name] = col;
+      schema[col.name] = col;
     });
-    return columns;
+    //add to cache with 5 minute expiry
+    schema[EXPIRES_AT] = +new Date() + 5 * 60 * 1000;
+    this.schemaCache[tableName] = schema;
+    done();
+    //return!
+    return schema;
   }
 
   /**
@@ -719,4 +770,8 @@ module.exports = class ServiceNowClient {
       this.log(...args);
     }
   }
-};
+}
+
+ServiceNowClient.expandTable = require("./util-table").expandTable;
+
+module.exports = ServiceNowClient;
