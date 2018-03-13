@@ -5,20 +5,21 @@ exports.expandTable = table => {
   if (!table.id) {
     throw `Table must have an "id"`;
   }
-  for (let name in table.columns) {
-    let col = table.columns[name];
-    if (col.name) {
-      //"name" provided
-      name = col.name;
-    } else {
-      //"name" inferred (add "u_")
-      let uname = `u_${name}`;
-      name = uname;
-      col.name = uname;
+  for (let id in table.columns) {
+    let col = table.columns[id];
+    if (!col.name) {
+      //infer name
+      if (/cmdb/.test(table.id) && ["name"].includes(id)) {
+        //out-of-the-box, use as is
+        col.name = id;
+      } else {
+        //add "u_" to id
+        col.name = `u_${id}`;
+      }
     }
-    table.columns[name] = exports.expandColumn(col);
+    exports.expandColumn(col);
+    table.columns[id] = col;
   }
-  return table;
 };
 
 //expand short-hand js column
@@ -58,5 +59,26 @@ exports.expandColumn = col => {
   if (!col.max_length) {
     col.max_length = default_length;
   }
-  return col;
+};
+
+//convert js column to sn column
+exports.snColumn = js => {
+  if (!js) {
+    throw `Missing column`;
+  } else if (!js.name) {
+    throw `Missing column name`;
+  }
+  let sn = {};
+  for (let k in js) {
+    let v = js[k];
+    if (k === "name") {
+      k = "element";
+    } else if (k === "type") {
+      k = "internal_type";
+    } else if (k === "label") {
+      k = "column_label";
+    }
+    sn[k] = v;
+  }
+  return sn;
 };

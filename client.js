@@ -30,7 +30,7 @@ const EXPIRES_AT = Symbol();
  * });
  * let results = await snc.get("u_commvault_products")
  */
-class ServiceNowClient {
+module.exports = class ServiceNowClient {
   constructor(config) {
     //validate config
     let { username, password, instance } = config;
@@ -232,7 +232,6 @@ class ServiceNowClient {
         sysparm_query: query
       }
     });
-    console.log(result);
     let count = prop(result, "stats", "count");
     if (!/^\d+$/.test(count)) {
       throw `Invalid count response`;
@@ -647,11 +646,9 @@ class ServiceNowClient {
    * @param {array} rows Send with backoff when throttled by ServiceNow.
    * @param {any} status The log-status instance for this task, see app/etl/log-status.js
    */
-  async deltaSyncAll(tableName, rows, status) {
+  async deltaMerge(tableName, rows, status) {
     if (!tableName) {
       throw "No table specified";
-    } else if (!/^u_dm_/.test(tableName)) {
-      throw `Invalid table specified (${tableName})`;
     } else if (!Array.isArray(rows)) {
       throw `Rows must be an array`;
     }
@@ -770,8 +767,4 @@ class ServiceNowClient {
       this.log(...args);
     }
   }
-}
-
-ServiceNowClient.expandTable = require("./util-table").expandTable;
-
-module.exports = ServiceNowClient;
+};

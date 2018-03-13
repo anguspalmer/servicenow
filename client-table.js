@@ -2,6 +2,7 @@ const sync = require("sync");
 
 const { cache } = require("cache");
 const { one, isGUID, titlize } = require("./util");
+const { snColumn } = require("./util-table");
 
 //split out table editing functionality
 module.exports = class ServiceNowClientTable {
@@ -17,6 +18,9 @@ module.exports = class ServiceNowClientTable {
    * @param {string} tableNameOrSysID
    */
   async get(tableNameOrSysID) {
+    if (!tableNameOrSysID) {
+      throw `Missing table name / table sys_id`;
+    }
     let rawTable = await this.getRaw(tableNameOrSysID);
     let table = {
       name: rawTable.name,
@@ -56,11 +60,10 @@ module.exports = class ServiceNowClientTable {
           let v = raw[k];
           //exclude some
           if (
-            //exlude all sys except id/created/updated
+            //exlude all sys except id/author/updated
             (k !== "sys_created_by" &&
-              k !== "sys_updated_by" &&
+              k !== "sys_created_on" &&
               k !== "sys_id" &&
-              k !== "sys_class_name" &&
               k.startsWith("sys_")) ||
             (k === "active" && v === true) ||
             k === "calculation" ||
@@ -169,19 +172,9 @@ module.exports = class ServiceNowClientTable {
    * @param {object} columnSpec The new column to create.
    */
   async addColumn(tableName, columnSpec) {
-    //throws on failure,
-    //sets defaults
     let col = snColumn(columnSpec);
-    this.log(`table "${tableName}": add column "${col.name}"`);
-    return await this.client.create("sys_dictionary", {
-      active: true,
-      name: tableName,
-      display: false,
-      column_label: col.label,
-      element: col.name,
-      max_length: col.max_length,
-      internal_type: col.type
-    });
+    this.log(`table "${tableName}": add column "${col.element}"`);
+    return await this.client.create("sys_dictionary", col);
   }
 
   /**
@@ -189,21 +182,10 @@ module.exports = class ServiceNowClientTable {
    * @param {string} tableName The target table
    * @param {object} columnName The existing column to update (must include sys_id).
    */
-  async updateColumn(tableName, columnUpdates) {
-    let updates = {};
-    for (let k in columnUpdates) {
-      let v = columnUpdates[k];
-      if (k === "name") {
-        k = "element";
-      } else if (k === "type") {
-        k = "internal_type";
-      } else if (k === "label") {
-        k = "column_label";
-      }
-      updates[k] = v;
-    }
-    this.log(`table "${tableName}": update column "${columnUpdates.name}"`);
-    return await this.client.update("sys_dictionary", updates);
+  async updateColumn(tableName, columnSpec) {
+    let col = snColumn(columnSpec);
+    this.log(`table "${tableName}": update column "${col.element}"`);
+    return await this.client.update("sys_dictionary", col);
   }
 
   /**
@@ -217,43 +199,51 @@ module.exports = class ServiceNowClientTable {
 
   /**
    * Sync a JS table spec with a servicenow table.
-   * @param {object} spec The table specification.
+   * @param {object} table The table specification.
    * @param {object} opts Options to customise the sync.
    */
-  async sync(spec, opts) {
-    if (!spec || typeof spec !== "object") {
+  async sync(table, opts) {
+    if (!table || typeof table !== "object") {
       throw `Invalid spec`;
     }
-    if (!opts || typeof opts !== "object") {
+    if (!opts) {
       opts = {};
+    } else if (typeof opts !== "object") {
+      throw `Invalid options`;
     }
-
     //fetch and validate servicenow columns
-    let table = await this.get(servicenow.id);
-    let existing = table.columns;
-    //perform diff incoming vs existing
-    let pending = { table: table.name, add: [], updates: [], remove: [] };
-    for (let k in incoming) {
-      let col = incoming[k];
+    let existingTable = await this.get(table.id);
+    let existingColumns = existingTable.columns;
+    let newColumns = table.columns;
+    //perform diff new vs existing
+    let pending = [];
+    pending.add = 0;
+    pending.update = 0;
+    pending.remove = 0;
+    pending.match = 0;
+    for (let k in newColumns) {
+      let col = newColumns[k];
       let { id, name } = col;
-      if (id !== name && id in existing) {
-        throw `Column "${id}" already exists on "${table.name}" but ` +
+      if (id !== name && id in existingColumns) {
+        throw `Column "${id}" already exists on "${existingTable.name}" but ` +
           `attempting to create as "${name}"`;
       }
-      if (name in existing) {
-        //compare type and max_length
-        let ecol = existing[name];
+      //already exists? need updating?
+      if (name in existingColumns) {
+        let ecol = existingColumns[name];
         let update = false;
-        let updates = {
+        let ncol = {
           name: name,
           sys_id: ecol.sys_id
         };
+        //update these columns
         for (let k of ["label", "max_length"]) {
           if (k in col && col[k] !== ecol[k]) {
             update = true;
-            updates[k] = col[k];
+            ncol[k] = col[k];
           }
         }
+        //ensure these columns match
         for (let k of ["type", "referenceTable"]) {
           if (k in col && col[k] !== ecol[k]) {
             throw `Column "${k}" differs, however it cannot be updated`;
@@ -264,14 +254,26 @@ module.exports = class ServiceNowClientTable {
             this.log(
               `WARNING: update column (${name}) from ` +
                 `parent table (${ecol.table}) not allowed`,
-              updates
+              ncol
             );
           } else {
-            pending.updates.push(updates);
+            pending.push({
+              description: `Update column "${col.name}"`,
+              execute: async () =>
+                await this.updateColumn(existingTable.name, ncol)
+            });
+            pending.update++;
           }
+        } else {
+          pending.match++;
         }
       } else {
-        pending.add.push(col);
+        //doesnt exist, add!
+        pending.push({
+          description: `Add new column "${col.name}"`,
+          execute: async () => await this.addColumn(existingTable.name, col)
+        });
+        pending.add++;
       }
     }
     //return pending actions
@@ -286,14 +288,10 @@ module.exports = class ServiceNowClientTable {
    * @param {object} pending The pending operations.
    */
   async commit(pending) {
-    for (let col of pending.add) {
-      await this.addColumn(pending.table, col);
-    }
-    for (let col of pending.updates) {
-      await this.updateColumn(pending.table, col);
-    }
-    for (let col of pending.remove) {
-      await this.removeColumn(pending.table, col);
+    this.log(`committing #${pending.length} changes`);
+    for (let change of pending) {
+      this.log(change.description);
+      await change.execute();
     }
     return true;
   }

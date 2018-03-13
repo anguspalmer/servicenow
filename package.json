@@ -2,7 +2,7 @@
   "name": "servicenow",
   "version": "0.1.0",
   "private": true,
-  "main": "client.js",
+  "main": "index.js",
   "dependencies": {
     "axios": "^0.18.0",
     "backo": "^1.1.0",
