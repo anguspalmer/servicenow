@@ -83,6 +83,8 @@ module.exports = class ServiceNowClient {
     } else {
       method = method.toUpperCase();
     }
+    let isRead = method === "GET" || method === "HEAD";
+    let isWrite = !isRead;
     if (!url) {
       throw `Missing URL`;
     }
@@ -92,8 +94,6 @@ module.exports = class ServiceNowClient {
     let isValidJSONURL = /\/v\d\/(import|table|stats|attachment)\/(\w+)(\/(\w+))?$/.test(
       url
     );
-    let isRead = method === "GET";
-    let isWrite = !isRead;
     let apiType = RegExp.$1;
     let tableAPI = apiType === "table";
     let importAPI = apiType === "import";
@@ -177,9 +177,13 @@ module.exports = class ServiceNowClient {
     if (isXML) {
       data = await parseXML(data);
     }
-    //check for errors
+    //check for errors (TODO xml errors...)
     if (data && data.error && data.error.message) {
-      throw `${method} "${tableName}" failed: ${data.error.message}`;
+      let msg = data.error.message;
+      if (data.error.detail) {
+        msg += ` (${data.error.detail})`;
+      }
+      throw `${method} "${tableName}" failed: ${msg}`;
     }
     //generic error (should not happen...)
     if (resp.status !== 200) {
@@ -207,12 +211,12 @@ module.exports = class ServiceNowClient {
    * Returns the number of rows in the given table.
    * @param {string} tableName
    */
-  async getUser() {
+  async getUser(username = this.username) {
     let result = await this.do({
       method: "GET",
       url: `/v1/table/sys_user`,
       params: {
-        sysparm_query: `user_name=${this.username}`
+        sysparm_query: `user_name=${username}`
       }
     });
     let user = one(result);

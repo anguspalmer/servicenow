@@ -2,15 +2,15 @@ const { titlize } = require("./util");
 
 //expand short-hand js table
 exports.expandTable = table => {
-  if (!table.id) {
-    throw `Table must have an "id"`;
+  if (!table.name) {
+    throw `Table must have a "name"`;
   }
   for (let id in table.columns) {
     let col = table.columns[id];
     if (!col.name) {
       //infer name
-      if (/cmdb/.test(table.id) && ["name"].includes(id)) {
-        //out-of-the-box, use as is
+      if (/cmdb/.test(table.name) && id === "name") {
+        //out-of-the-box, use id as is
         col.name = id;
       } else {
         //add "u_" to id
