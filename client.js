@@ -115,7 +115,7 @@ module.exports = class ServiceNowClient {
       throw `Invalid import table specified (${tableName})`;
     }
     //do request!
-    let resp;
+    let resp, respErr;
     //with retries
     let backoff,
       attempt = 0;
@@ -142,20 +142,25 @@ module.exports = class ServiceNowClient {
       let retry = false;
       try {
         this.debug(`do: ${method} ${url}...`);
+        respErr = null;
         resp = await this.api(request);
       } catch (err) {
+        respErr = err.toString();
         //tcp disconnected, retry
         if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN") {
           retry = true;
         }
       }
-      if (resp.status === 429) {
+      if (resp && resp.status === 429) {
         retry = true;
       }
       if (!retry) {
         break;
       }
       attempt++;
+    }
+    if (respErr) {
+      throw respErr;
     }
     //request has no data
     if (resp.status === 204 || resp.status === 201) {
