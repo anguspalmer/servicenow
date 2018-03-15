@@ -176,8 +176,24 @@ module.exports = class ServiceNowClientTable {
     return table.sys_id;
   }
 
+  async getTableColumnSysID(tableName, colName) {
+    let table = one(
+      await this.client.do({
+        url: `/v2/table/sys_dictionary`,
+        params: {
+          sysparm_query: `name=${tableName}^element=${colName}`,
+          sysparm_fields: "sys_id"
+        }
+      })
+    );
+    if (!table) {
+      throw `Table "${tableName}" column "${colName}" not found`;
+    }
+    return table.sys_id;
+  }
+
   /**
-   * Delete a servicenow table. Very dangerous :O
+   * Create a servicenow table.
    * @param {string} tableName The target table
    */
   async create(tableSpec) {
@@ -258,8 +274,10 @@ module.exports = class ServiceNowClientTable {
    * @param {string} tableName The target table
    * @param {object} columnName The existing column to delete.
    */
-  async removeColumn(tableName, columnName) {
-    throw `Not implemented`;
+  async deleteColumn(tableName, columnName) {
+    let sysID = await this.getTableColumnSysID(tableName, columnName);
+    this.log(`table "${tableName}": delete column "${columnName}"`);
+    return await this.client.delete("sys_dictionary", { sys_id: sysID });
   }
 
   /**
@@ -286,7 +304,7 @@ module.exports = class ServiceNowClientTable {
     //fetch and validate servicenow columns
     let existingTable = await this.get(table.name);
     if (!existingTable) {
-      //add table
+      //add table and sync all columns
       pending = [
         {
           name: table.name,
@@ -302,7 +320,6 @@ module.exports = class ServiceNowClientTable {
           }
         }
       ];
-      // throw `Please manually create "${table.name}"`;
     } else {
       //add/update/remove columns
       let existingColumns = existingTable.columns;
@@ -371,6 +388,33 @@ module.exports = class ServiceNowClientTable {
           commit: async () => await this.createColumn(tableName, col)
         });
       }
+    }
+    //
+    let index = {};
+    for (let id in newColumns) {
+      let col = newColumns[id];
+      index[col.name] = col;
+    }
+    for (let name in existingColumns) {
+      if (!name.startsWith("u_")) {
+        continue; //can only delete user columns
+      }
+      if (name in index) {
+        continue; //found in both, dont delete
+      }
+      let col = existingColumns[name];
+      if (col.table !== tableName) {
+        continue; //found on another table, dont delete
+      }
+      if (col.sys_created_by !== this.client.username) {
+        continue; //can only delete columns made by us
+      }
+      pending.push({
+        name: name,
+        type: "delete",
+        description: `Delete column "${name}"`,
+        commit: async () => await this.deleteColumn(tableName, name)
+      });
     }
     return pending;
   }

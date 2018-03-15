@@ -141,7 +141,7 @@ module.exports = class ServiceNowClient {
       //perform HTTP request, determine if we can rety
       let retry = false;
       try {
-        this.log(`do: ${method} ${url}...`);
+        this.debug(`do: ${method} ${url}...`);
         resp = await this.api(request);
       } catch (err) {
         //tcp disconnected, retry

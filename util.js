@@ -197,6 +197,24 @@ exports.convertSN = (schema, obj) => {
 
 exports.isGUID = str => /^[a-f0-9]{32}$/.test(str);
 
+const acryonyms = new RegExp(
+  `\\b${[
+    "ip",
+    "api",
+    "id",
+    "guid",
+    "uuid",
+    "vm",
+    "iops",
+    "cpg",
+    "cpu",
+    "ram",
+    "gb",
+    "mb"
+  ].join("|")}\\b`,
+  "gi"
+);
+
 exports.titlize = slug => {
   return slug
     .replace(/^u_/, "")
@@ -204,7 +222,7 @@ exports.titlize = slug => {
     .map(p => {
       let t = p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
       //TODO lookup dictionary for short words, not-exist? uppercase
-      t = t.replace(/\b(ip|api|guid|uuid|id|vm)\b/gi, s => s.toUpperCase());
+      t = t.replace(acryonyms, s => s.toUpperCase());
       return t;
     })
     .join(" ");
