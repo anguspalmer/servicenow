@@ -13,7 +13,14 @@ const parseXML = sync.promisify(xml2js.parseString);
 
 const ServiceNowClientTable = require("./client-table");
 const fakeApi = require("./fake-api");
-const { convertJS, prop, one, createRowHash, isGUID } = require("./util");
+const {
+  convertJS,
+  convertSN,
+  prop,
+  one,
+  createRowHash,
+  isGUID
+} = require("./util");
 const API_CONCURRENCY = 40;
 const EXPIRES_AT = Symbol();
 
@@ -141,7 +148,7 @@ module.exports = class ServiceNowClient {
       //perform HTTP request, determine if we can rety
       let retry = false;
       try {
-        this.debug(`do: ${method} ${url}...`);
+        this.debug(`do: ${method} ${url}`, hasData ? request.data : "");
         respErr = null;
         resp = await this.api(request);
       } catch (err) {
@@ -652,113 +659,197 @@ module.exports = class ServiceNowClient {
   /**
    * deltaSyncAll objects in an array with a ServiceNow table
    * @param {string} tableName The target import table
-   * @param {array} rows Send with backoff when throttled by ServiceNow.
+   * @param {array} incomingRows
    * @param {any} status The log-status instance for this task, see app/etl/log-status.js
    */
-  async deltaMerge(tableName, rows, status) {
+  async deltaMerge(tableName, incomingRows, status = console, opts = {}) {
     if (!tableName) {
       throw "No table specified";
-    } else if (!Array.isArray(rows)) {
-      throw `Rows must be an array`;
+    } else if (!Array.isArray(incomingRows)) {
+      throw `Incoming rows must be an array`;
+    }
+    //
+    let { primaryKey = "correlation_id", deletedFlag = "u_in_datamart" } = opts;
+    if (!primaryKey) {
+      throw `Primary key required`;
+    }
+    //load table schema
+    let schema = await this.getSchema(tableName);
+    //load all existing rows
+    let existingRows = await this.get(tableName);
+    if (!Array.isArray(existingRows)) {
+      throw `Existing rows must be an array`;
+    }
+    let allRows = {
+      incoming: incomingRows,
+      existing: existingRows
+    };
+    let rows = {
+      incoming: [],
+      existing: []
+    };
+    let index = {
+      incoming: {},
+      existing: {}
+    };
+    //validate and index all rows
+    for (let type in allRows) {
+      let missing = 0;
+      let duplicates = {};
+      for (let row of allRows[type]) {
+        let cid = row[primaryKey];
+        if (!cid) {
+          missing++;
+          continue;
+        }
+        if (cid in index[type]) {
+          duplicates[cid] = true;
+          continue;
+        }
+        let snRow = convertSN(schema, row);
+        index[type][cid] = snRow;
+        rows[type].push(snRow);
+      }
+      if (missing > 0) {
+        status.warn(`Found #${missing} ${type} rows with no "${primaryKey}"`);
+      }
+      let numDuplicates = Object.keys(duplicates).length;
+      if (numDuplicates > 0) {
+        status.warn(`Found #${numDuplicates} ${type} duplicate rows`);
+      }
+    }
+    status.log(
+      `delta merging #${rows.incoming.length} entries into ${tableName}, ` +
+        `found #${rows.existing.length} existing entries`
+    );
+    //split into three groups
+    let pending = {
+      create: [],
+      update: [],
+      delete: []
+    };
+    //pending creates/updates
+    for (let incomingRow of rows.incoming) {
+      //incoming row exists => currently in datamart
+      if (deletedFlag) {
+        incomingRow[deletedFlag] = "1"; //true
+      }
+      let cid = incomingRow[primaryKey];
+      let existingRow = index.existing[cid];
+      //create
+      if (!existingRow) {
+        pending.create.push(incomingRow);
+        continue;
+      }
+      if (!existingRow.sys_id) {
+        throw `Existing row missing "sys_id"`;
+      }
+      //compare against existing row
+      let payload = {};
+      let changed = false;
+      for (let k in incomingRow) {
+        let incomingVal = incomingRow[k];
+        let existingVal = existingRow[k];
+
+        if (incomingVal === undefined) {
+          continue;
+        }
+        if (
+          existingVal === undefined ||
+          JSON.stringify(incomingVal) !== JSON.stringify(existingVal)
+        ) {
+          changed = true;
+          payload[k] = incomingVal;
+          this.log(`DEBUG: ${cid}: ${k}: ${existingVal} => ${incomingVal}`);
+        }
+      }
+      if (changed) {
+        //ensure correct sys_id
+        payload.sys_id = existingRow.sys_id;
+        pending.update.push(payload);
+      }
+    }
+    //pending deletes
+    for (let existingRow of rows.existing) {
+      let cid = existingRow[primaryKey];
+      if (cid in index.incoming) {
+        continue;
+      }
+      let payload = {
+        sys_id: existingRow.sys_id
+      };
+      //missing from incoming, delete it!
+      if (deletedFlag) {
+        if (existingRow[deletedFlag] === "0") {
+          //already "deleted"
+          continue;
+        }
+        payload[deletedFlag] = "0";
+      }
+      pending.delete.push(payload);
+    }
+    //note incoming api actions
+    let msg = [];
+    for (let action in pending) {
+      let count = pending[action].length;
+      if (count > 0) {
+        msg.push(`${action} #${count} rows`);
+      }
+    }
+    if (msg.length === 0) {
+      status.log(`No changes`);
+      return {
+        rowsCreated: 0,
+        rowsUpdated: 0,
+        rowsDeleted: 0
+      };
+    }
+    status.log(msg.join(", "));
+    if (status) {
+      status.add(
+        pending.create.length + pending.update.length + pending.delete.length
+      );
     }
     //capture stats
     let rowsCreated = 0;
     let rowsUpdated = 0;
     let rowsDeleted = 0;
-    //load all existing rows
-    let existingRows = await this.get(tableName);
-    //index by "id"
-    let index = {};
-    for (let row of existingRows) {
-      let id = row.u_id;
-      if (!id) {
-        //no id, dont index
-        continue;
-      } else if (id in index) {
-        //already indexed, dont re-index
-        continue;
-      }
-      index[id] = row;
-    }
-    status.log(
-      `syncing #${rows.length} entries with ${tableName}, ` +
-        `found #${existingRows.length} existing entries ` +
-        `(indexed #${Object.keys(index).length})`
-    );
-    //split into two groups
-    let existing = {};
-    rows.forEach(row => {
-      let id = row.u_id;
-      if (id && id in index) {
-        existing[id] = index[id];
-        delete index[id];
-      }
-    });
-    let missing = index;
-    let missingRows = Object.values(missing);
-    //mark changes+deletes actions to be done
-    if (status) {
-      status.add(rows.length + missingRows.length);
-    }
-    //merge!
-    await sync.each(API_CONCURRENCY, rows, async row => {
-      let id = row.u_id;
-      let exists = id && id in existing;
-      if (exists) {
-        //update existing entry
-        let prev = existing[id];
-        //use existing system id
-        row.sys_id = prev.sys_id;
-        //compare against prev
-        let changed = false;
-        for (let k in row) {
-          if (String(row[k]) !== prev[k]) {
-            changed = true;
-            break;
-          }
-        }
-        if (changed) {
-          //update existing
-          await this.update(tableName, row);
-          rowsUpdated++;
-        }
-      } else {
-        //create new entry
-        await this.create(tableName, row);
-        rowsCreated++;
-      }
+    //create all
+    await sync.each(API_CONCURRENCY, pending.create, async row => {
+      //perform creation
+      await this.create(tableName, row);
+      rowsCreated++;
       //mark 1 action done
       if (status) {
         status.done();
       }
     });
-    //those remaining in the index need to be deleted
-    if (missingRows.length > 0) {
-      await sync.each(API_CONCURRENCY, missingRows, async row => {
-        let deleted = row.u_deleted;
-        if (deleted === "1") {
-          //already "deleted"
-          return;
-        }
-        if (deleted === undefined) {
-          //table allows real deletes
-          await this.delete(tableName, row);
-        } else {
-          //table just sets deleted flag
-          await this.update(tableName, {
-            sys_id: row.sys_id,
-            u_deleted: 1
-          });
-        }
-        rowsDeleted++;
-        //mark 1 action done
-        if (status) {
-          status.done();
-        }
-      });
-    }
-    //all done
-    status.log(`synced #${rows.length} entries to ${tableName}`);
+    //update all
+    await sync.each(API_CONCURRENCY, pending.update, async row => {
+      //perform creation
+      await this.update(tableName, row);
+      rowsUpdated++;
+      //mark 1 action done
+      if (status) {
+        status.done();
+      }
+    });
+    //update all
+    await sync.each(API_CONCURRENCY, pending.delete, async row => {
+      //perform deletion
+      if ("u_in_datamart" in row) {
+        //"delete" existing
+        await this.update(tableName, row);
+      } else {
+        //delete!!! existing
+        await this.delete(tableName, row);
+      }
+      rowsDeleted++;
+      //mark 1 action done
+      if (status) {
+        status.done();
+      }
+    });
     //provide merge results
     return {
       rowsCreated,

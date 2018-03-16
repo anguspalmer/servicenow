@@ -165,20 +165,20 @@ exports.convertSN = (schema, obj) => {
         v = v === 1;
       }
       if (typeof v !== "boolean") {
-        throw `Invalid boolean v: ${v}`;
+        throw `"${k}" expected boolean "${v}"`;
       }
       //servicenow api returns booleans as 1 or 0
       v = `${v ? 1 : 0}`;
     } else if (t === "decimal" || t === "float") {
-      if (typeof v === "number") {
-        throw `Invalid number v: ${v}`;
+      if (typeof v !== "number") {
+        throw `"${k}" expected number "${v}"`;
       }
       // let places = 2
       //TODO calc number of places, scope
-      v = Math.round(v * 100) / 100; //2 places
+      v = `${Math.round(v * 100) / 100}`; //2 places
     } else if (t === "integer") {
-      if (typeof v === "number") {
-        throw `Invalid number v: ${v}`;
+      if (typeof v !== "number") {
+        throw `"${k}" expected number "${v}"`;
       }
       v = `${Math.round(v)}`;
     } else if (t == "string") {
@@ -187,8 +187,20 @@ exports.convertSN = (schema, obj) => {
         console.log(`<WARN> Truncated column ${k} with length  ${v.length}`);
         v = v.slice(0, s.maxLength);
       }
+    } else if (t === "glide_date_time") {
+      if (!(v instanceof Date)) {
+        throw `"${k}" expected date "${v}"`;
+      }
+      v = v
+        .toISOString()
+        .replace("T", " ")
+        .replace("Z", "");
     } else if (typeof v !== "string") {
-      throw `ServiceNow only supports strings (found: ${v})`;
+      throw `"${k}" expected string (found type "${t}" with value "${v}")`;
+    }
+    //number fields really are null, not empty string
+    if (v === "" && (t === "decimal" || t === "float" || t === "integer")) {
+      continue;
     }
     row[k] = v;
   }

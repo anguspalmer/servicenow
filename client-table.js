@@ -300,30 +300,32 @@ module.exports = class ServiceNowClientTable {
     }
     let newColumns = table.columns;
     //perform diff
-    let pending;
+    let pending = {};
     //fetch and validate servicenow columns
     let existingTable = await this.get(table.name);
     if (!existingTable) {
       //add table and sync all columns
-      pending = [
-        {
-          name: table.name,
-          type: "create",
-          description: `Create table "${table.name}" and all of its columns`,
-          commit: async () => {
-            //create the table
-            await this.create(table);
-            //sleep for 3 seconds???
-            await sync.sleep(3000);
-            //the recurse into an auto-commit sync
-            await this.sync(table, { commit: true });
-          }
+      pending.table = {
+        name: table.name,
+        type: "create",
+        description: `Create table "${table.name}" and all of its columns`,
+        commit: async () => {
+          //create the table
+          await this.create(table);
+          //sleep for 3 seconds???
+          await sync.sleep(3000);
+          //the recurse into an auto-commit sync
+          await this.sync(table, { commit: true });
         }
-      ];
+      };
     } else {
       //add/update/remove columns
       let existingColumns = existingTable.columns;
-      pending = this.syncColumns(tableName, existingColumns, newColumns);
+      pending.columns = this.syncColumns(
+        tableName,
+        existingColumns,
+        newColumns
+      );
     }
     //commit pending actions straight away
     if (opts.commit) {
@@ -333,61 +335,83 @@ module.exports = class ServiceNowClientTable {
   }
 
   syncColumns(tableName, existingColumns, newColumns) {
-    let pending = [];
-    for (let k in newColumns) {
-      let col = newColumns[k];
+    let pending = {};
+    for (let dmId in newColumns) {
+      let col = newColumns[dmId];
       let { id, name } = col;
       if (id !== name && id in existingColumns) {
-        throw `Column "${id}" already exists on "${tableName}" but ` +
-          `attempting to create as "${name}"`;
-      }
-      //already exists? need updating?
-      if (name in existingColumns) {
-        let ecol = existingColumns[name];
-        let changed = false;
-        let ncol = {
-          name: name,
-          sys_id: ecol.sys_id
+        pending[dmId] = {
+          name: id,
+          type: "error",
+          description:
+            `Column "${id}" already exists on "${tableName}" but ` +
+            `attempting to create as "${name}"`
         };
-        //update these columns
-        for (let k of ["label", "max_length"]) {
-          if (k in col && col[k] !== ecol[k]) {
-            changed = true;
-            ncol[k] = col[k];
-            this.log(`DEBUG: ${k}: ${ecol[k]} => ${col[k]}`);
-          }
-        }
-        //ensure these columns match
-        for (let k of ["type", "reference_table"]) {
-          if (k in col && col[k] !== ecol[k]) {
-            throw `Column "${k}" differs, however it cannot be updated`;
-          }
-        }
-        if (changed) {
-          if (tableName !== ecol.table) {
-            this.log(
-              `WARNING: update column (${name}) from ` +
-                `parent table (${ecol.table}) not allowed`,
-              ncol
-            );
-          } else {
-            pending.push({
-              name,
-              type: "update",
-              description: `Update column "${name}"`,
-              commit: async () => await this.updateColumn(tableName, ncol)
-            });
-          }
-        }
-      } else {
-        //doesnt exist, create!
-        pending.push({
+        continue;
+      }
+      let hasColumn = name in existingColumns;
+      //doesnt exist, create!
+      if (!hasColumn) {
+        pending[dmId] = {
           name,
           type: "create",
           description: `Create new column "${name}"`,
           commit: async () => await this.createColumn(tableName, col)
-        });
+        };
+        continue;
       }
+      //already exists? need updating?
+      let ecol = existingColumns[name];
+      let changed = false;
+      let ncol = {
+        name: name,
+        sys_id: ecol.sys_id
+      };
+      let detail = [];
+      //update these columns
+      for (let k of ["label", "max_length"]) {
+        if (k in col && col[k] !== ecol[k]) {
+          changed = true;
+          ncol[k] = col[k];
+          detail.push(`"${k}" from ${ecol[k]} to ${col[k]}`);
+        }
+      }
+      //ensure these columns match
+      let match = true;
+      for (let k of ["type", "reference_table"]) {
+        if (k in col && col[k] !== ecol[k]) {
+          pending[dmId] = {
+            name,
+            type: "error",
+            description:
+              `Column "${name}" ` +
+              `${k} differs (${ecol[k]} => ${col[k]}), ` +
+              `however it cannot be updated`
+          };
+          match = false;
+          break;
+        }
+      }
+      if (!match || !changed) {
+        continue;
+      }
+      if (tableName !== ecol.table) {
+        pending[dmId] = {
+          name,
+          type: "error",
+          description:
+            `Update column "${name}" from ` +
+            `parent table (${ecol.table}) not allowed`
+        };
+        continue;
+      }
+      //changed valid fields, update!
+      pending[dmId] = {
+        name,
+        type: "update",
+        description: `Update column "${name}" (${detail.join(",")})`,
+        commit: async () => await this.updateColumn(tableName, ncol)
+      };
     }
     //
     let index = {};
@@ -409,12 +433,12 @@ module.exports = class ServiceNowClientTable {
       if (col.sys_created_by !== this.client.username) {
         continue; //can only delete columns made by us
       }
-      pending.push({
+      pending[k] = {
         name: name,
         type: "delete",
         description: `Delete column "${name}"`,
         commit: async () => await this.deleteColumn(tableName, name)
-      });
+      };
     }
     return pending;
   }
@@ -424,8 +448,17 @@ module.exports = class ServiceNowClientTable {
    * @param {object} pending The pending operations.
    */
   async commitAll(pending) {
-    this.log(`committing #${pending.length} changes`);
-    for (let change of pending) {
+    let columnChanges = Object.values(pending.columns);
+    let errors = columnChanges.filter(p => p.type === "error");
+    if (errors.length > 0) {
+      throw `Cannot commit changes, encountered ${errors.length} errors`;
+    }
+    this.log(`committing all changes`);
+    if (pending.table) {
+      this.log(pending.table.description);
+      await pending.table.commit();
+    }
+    for (let change of columnChanges) {
       this.log(change.description);
       await change.commit();
     }
