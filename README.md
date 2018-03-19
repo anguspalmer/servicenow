@@ -1,21 +1,11 @@
-One at a time:
+# servicenow
 
-    [DM] -> IMPORT -> [SN XMAP 1,2,3]
+A ServiceNow REST API client
 
-Bulk insert:
+* Provides low-level API, `do()` which `axios` to provide ServiceNow specific helpers to all HTTP requests
+* Provides high-level APIs to CRUD records and modify tables
 
-    [DM] -> DELTA -> [MIRROR SN] -> [SN XMAP 1,2,3]
-
-    Requires mirror table
-
-### Delta Import
-
-* `GET /api/now/v2/table/u_imp_dm_vm_instance` uses the table API to returns all previous imports
-* compare incoming dataset to previous imports
-* import only those with changed data
-* after an import, delete the older import result to ensure its PK is unique
-
-### Auto Table sync
+### Table sync refernces
 
 * Automate table and column creation using glide record
   https://community.servicenow.com/thread/178725
