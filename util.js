@@ -155,7 +155,7 @@ exports.convertSN = (schema, obj) => {
     }
     //change schema type => string
     let t = s.type;
-    if (v === "" || v === null || v === undefined) {
+    if (v === null) {
       //servicenow api returns "" for all null / empty / blank fields
       v = "";
     } else if (t === "boolean") {
@@ -209,33 +209,35 @@ exports.convertSN = (schema, obj) => {
 
 exports.isGUID = str => /^[a-f0-9]{32}$/.test(str);
 
-const acryonyms = new RegExp(
-  `\\b${[
-    "ip",
-    "api",
-    "id",
-    "guid",
-    "uuid",
-    "vm",
-    "iops",
-    "cpg",
-    "cpu",
-    "ram",
-    "gb",
-    "mb"
-  ].join("|")}\\b`,
-  "gi"
-);
+const titlizeMap = {
+  ip: "IP",
+  api: "API",
+  id: "ID",
+  guid: "GUID",
+  uuid: "UUID",
+  vm: "VM",
+  iops: "IOPS",
+  cpg: "CPG",
+  cpu: "CPU",
+  ram: "RAM",
+  gb: "GB",
+  mb: "MB",
+  caas: "CaaS",
+  os: "OS",
+  dns: "DNS",
+  ci: "CI"
+};
 
-exports.titlize = slug => {
-  return slug
+exports.titlize = slug =>
+  slug
     .replace(/^u_/, "")
     .split("_")
     .map(p => {
-      let t = p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
-      //TODO lookup dictionary for short words, not-exist? uppercase
-      t = t.replace(acryonyms, s => s.toUpperCase());
-      return t;
+      //has preset mapping?
+      if (p in titlizeMap) {
+        return titlizeMap[p];
+      }
+      //automatically titlize
+      return p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
     })
     .join(" ");
-};

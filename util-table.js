@@ -28,7 +28,7 @@ exports.expandColumn = col => {
     throw `Missing column "name"`;
   }
   if (typeof col.type !== "string") {
-    throw `Expected column "${col.name}" type to be a string`;
+    throw `Column "${col.name}" is missing the "type" property`;
   }
   col.type = col.type.toLowerCase();
   if (!col.label) {
@@ -53,11 +53,18 @@ exports.expandColumn = col => {
       default_length = 40;
       col.type = "glide_date_time";
       break;
+    case "reference":
+    case "guid":
+      default_length = 32;
+      break;
     default:
       throw `Unknown column type "${col.type}"`;
   }
   if (!col.max_length) {
     col.max_length = default_length;
+  }
+  if (col.type === "reference" && !col.reference_table) {
+    throw `Column "${col.name}" is missing the "reference_table" property`;
   }
 };
 

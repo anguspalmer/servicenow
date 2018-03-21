@@ -80,7 +80,7 @@ module.exports = class ServiceNowClientTable {
           //transform
           if (k === "internal_type") {
             k = "type";
-            v = v.value;
+            v = v.value.toLowerCase();
           } else if (k === "reference") {
             k = "reference_table";
             v = v.value;
@@ -245,7 +245,6 @@ module.exports = class ServiceNowClientTable {
    */
   async createColumn(tableName, columnSpec) {
     let col = snColumn(columnSpec);
-    //can only create "u_" columns
     if (!/^u_/.test(col.element)) {
       throw `Column name (${col.element}) must begin with "u_"`;
     }
@@ -265,6 +264,9 @@ module.exports = class ServiceNowClientTable {
    */
   async updateColumn(tableName, columnSpec) {
     let col = snColumn(columnSpec);
+    if (!/^u_/.test(col.element)) {
+      throw `Column name (${col.element}) must begin with "u_"`;
+    }
     this.log(`table "${tableName}": update column "${col.element}"`);
     return await this.client.update("sys_dictionary", col);
   }
@@ -275,6 +277,9 @@ module.exports = class ServiceNowClientTable {
    * @param {object} columnName The existing column to delete.
    */
   async deleteColumn(tableName, columnName) {
+    if (!/^u_/.test(columnName)) {
+      throw `Column name (${columnName}) must begin with "u_"`;
+    }
     let sysID = await this.getTableColumnSysID(tableName, columnName);
     this.log(`table "${tableName}": delete column "${columnName}"`);
     return await this.client.delete("sys_dictionary", { sys_id: sysID });
@@ -308,17 +313,15 @@ module.exports = class ServiceNowClientTable {
       pending.table = {
         name: table.name,
         type: "create",
-        description: `Create table "${table.name}" and all of its columns`,
-        commit: async () => {
-          //create the table
-          await this.create(table);
-          //sleep for 3 seconds???
-          await sync.sleep(3000);
-          //the recurse into an auto-commit sync
-          await this.sync(table, { commit: true });
-        }
+        description: `Create table "${table.name}"`,
+        commit: async () => await this.create(table)
       };
     } else {
+      //ensure parent rule is enforced
+      if (table.parent && table.parent !== existingTable.parent) {
+        throw `Parent table mismatch. Table "${table.name}" should have ` +
+          `parent "${table.parent}" but found "${existingTable.parent}"`;
+      }
       //add/update/remove columns
       let existingColumns = existingTable.columns;
       pending.columns = this.syncColumns(
@@ -334,6 +337,8 @@ module.exports = class ServiceNowClientTable {
     return pending;
   }
 
+  //sync columns returns a set of pending actions
+  //but does not commit them.
   syncColumns(tableName, existingColumns, newColumns) {
     let pending = {};
     for (let dmId in newColumns) {
@@ -352,6 +357,16 @@ module.exports = class ServiceNowClientTable {
       let hasColumn = name in existingColumns;
       //doesnt exist, create!
       if (!hasColumn) {
+        if (!name.startsWith("u_")) {
+          pending[dmId] = {
+            name,
+            type: "error",
+            description:
+              `Create column "${name}" ` +
+              `not allowed, does not start with "u_"`
+          };
+          continue;
+        }
         pending[dmId] = {
           name,
           type: "create",
@@ -373,7 +388,7 @@ module.exports = class ServiceNowClientTable {
         if (k in col && col[k] !== ecol[k]) {
           changed = true;
           ncol[k] = col[k];
-          detail.push(`"${k}" from ${ecol[k]} to ${col[k]}`);
+          detail.push(`"${k}" from "${ecol[k]}" to "${col[k]}"`);
         }
       }
       //ensure these columns match
@@ -395,13 +410,19 @@ module.exports = class ServiceNowClientTable {
       if (!match || !changed) {
         continue;
       }
+      let prevent = null;
       if (tableName !== ecol.table) {
+        prevent = `column exists on parent table (${ecol.table})`;
+      } else if (!name.startsWith("u_")) {
+        prevent = `column is out-of-the-box`;
+      }
+      if (prevent) {
         pending[dmId] = {
           name,
           type: "error",
           description:
-            `Update column "${name}" from ` +
-            `parent table (${ecol.table}) not allowed`
+            `Update column "${name}" (${detail.join(",")}) from ` +
+            `not allowed, ${prevent}`
         };
         continue;
       }

@@ -722,6 +722,7 @@ module.exports = class ServiceNowClient {
       `delta merging #${rows.incoming.length} entries into ${tableName}, ` +
         `found #${rows.existing.length} existing entries`
     );
+    let rowsMatched = 0;
     //split into three groups
     let pending = {
       create: [],
@@ -750,9 +751,11 @@ module.exports = class ServiceNowClient {
       for (let k in incomingRow) {
         let incomingVal = incomingRow[k];
         let existingVal = existingRow[k];
-
         if (incomingVal === undefined) {
           continue;
+        }
+        if (existingVal === undefined) {
+          existingVal = "";
         }
         if (
           existingVal === undefined ||
@@ -760,13 +763,16 @@ module.exports = class ServiceNowClient {
         ) {
           changed = true;
           payload[k] = incomingVal;
-          this.log(`DEBUG: ${cid}: ${k}: ${existingVal} => ${incomingVal}`);
+          this.log(`DEBUG: ${cid}: ${k}: '${existingVal}' => '${incomingVal}'`);
         }
       }
       if (changed) {
         //ensure correct sys_id
         payload.sys_id = existingRow.sys_id;
+        payload.sys_class_name = existingRow.sys_class_name;
         pending.update.push(payload);
+      } else {
+        rowsMatched++;
       }
     }
     //pending deletes
@@ -799,6 +805,7 @@ module.exports = class ServiceNowClient {
     if (msg.length === 0) {
       status.log(`No changes`);
       return {
+        rowsMatched,
         rowsCreated: 0,
         rowsUpdated: 0,
         rowsDeleted: 0
@@ -810,15 +817,10 @@ module.exports = class ServiceNowClient {
         pending.create.length + pending.update.length + pending.delete.length
       );
     }
-    //capture stats
-    let rowsCreated = 0;
-    let rowsUpdated = 0;
-    let rowsDeleted = 0;
     //create all
     await sync.each(API_CONCURRENCY, pending.create, async row => {
       //perform creation
       await this.create(tableName, row);
-      rowsCreated++;
       //mark 1 action done
       if (status) {
         status.done();
@@ -828,7 +830,6 @@ module.exports = class ServiceNowClient {
     await sync.each(API_CONCURRENCY, pending.update, async row => {
       //perform creation
       await this.update(tableName, row);
-      rowsUpdated++;
       //mark 1 action done
       if (status) {
         status.done();
@@ -837,14 +838,13 @@ module.exports = class ServiceNowClient {
     //update all
     await sync.each(API_CONCURRENCY, pending.delete, async row => {
       //perform deletion
-      if ("u_in_datamart" in row) {
+      if (deletedFlag && deletedFlag in row) {
         //"delete" existing
         await this.update(tableName, row);
       } else {
         //delete!!! existing
         await this.delete(tableName, row);
       }
-      rowsDeleted++;
       //mark 1 action done
       if (status) {
         status.done();
@@ -852,9 +852,10 @@ module.exports = class ServiceNowClient {
     });
     //provide merge results
     return {
-      rowsCreated,
-      rowsUpdated,
-      rowsDeleted
+      rowsMatched,
+      rowsCreated: pending.create.length,
+      rowsUpdated: pending.update.length,
+      rowsDeleted: pending.delete.length
     };
   }
 
