@@ -436,8 +436,8 @@ module.exports = class ServiceNowClientTable {
     }
     //
     let index = {};
-    for (let id in newColumns) {
-      let col = newColumns[id];
+    for (let dmId in newColumns) {
+      let col = newColumns[dmId];
       index[col.name] = col;
     }
     for (let name in existingColumns) {
@@ -454,7 +454,7 @@ module.exports = class ServiceNowClientTable {
       if (col.sys_created_by !== this.client.username) {
         continue; //can only delete columns made by us
       }
-      pending[k] = {
+      pending[name] = {
         name: name,
         type: "delete",
         description: `Delete column "${name}"`,
