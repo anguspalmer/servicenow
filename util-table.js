@@ -38,7 +38,7 @@ exports.expandColumn = col => {
   //check type AND set default length
   switch (col.type) {
     case "text":
-      default_length = 65000;
+      default_length = 65535;
       break;
     case "string":
       default_length = 255;
@@ -69,6 +69,16 @@ exports.expandColumn = col => {
 };
 
 //convert js column to sn column
+
+const snColumnMap = {
+  sys_id: "sys_id",
+  name: "element",
+  type: "internal_type",
+  label: "column_label",
+  reference_table: "reference",
+  reference_field: false
+};
+
 exports.snColumn = js => {
   if (!js) {
     throw `Missing column`;
@@ -78,14 +88,14 @@ exports.snColumn = js => {
   let sn = {};
   for (let k in js) {
     let v = js[k];
-    if (k === "name") {
-      k = "element";
-    } else if (k === "type") {
-      k = "internal_type";
-    } else if (k === "label") {
-      k = "column_label";
+    let newk = snColumnMap[k];
+    if (newk === false) {
+      continue;
+    } else if (!newk) {
+      console.log(`servicenow: util-list: no column mapped to "${k}"`);
+      continue;
     }
-    sn[k] = v;
+    sn[newk] = v;
   }
   return sn;
 };

@@ -191,6 +191,7 @@ exports.convertSN = (schema, obj) => {
       if (!(v instanceof Date)) {
         throw `"${k}" expected date "${v}"`;
       }
+      v.setMilliseconds(0); //SN cannot store millis
       v = v
         .toISOString()
         .replace("T", " ")
@@ -225,7 +226,9 @@ const titlizeMap = {
   caas: "CaaS",
   os: "OS",
   dns: "DNS",
-  ci: "CI"
+  ci: "CI",
+  rest: "REST",
+  soap: "SOAP"
 };
 
 exports.titlize = slug =>

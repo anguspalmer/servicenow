@@ -1,5 +1,6 @@
 const sync = require("sync");
 const { convertSN } = require("./util");
+const API_CONCURRENCY = 40;
 
 //split out table delta functionality
 module.exports = class ServiceNowClientTable {
@@ -90,6 +91,13 @@ module.exports = class ServiceNowClientTable {
       let existingRow = index.existing[cid];
       //create
       if (!existingRow) {
+        //first discovered now!
+        if (
+          "first_discovered" in schema &&
+          !("first_discovered" in incomingRow)
+        ) {
+          incomingRow.first_discovered = new Date();
+        }
         pending.create.push(incomingRow);
         continue;
       }
