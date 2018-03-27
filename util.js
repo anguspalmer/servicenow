@@ -227,20 +227,26 @@ const titlizeMap = {
   os: "OS",
   dns: "DNS",
   ci: "CI",
+  ha: "HA",
   rest: "REST",
   soap: "SOAP"
 };
 
 exports.titlize = slug =>
   slug
+    .toLowerCase()
     .replace(/^u_/, "")
     .split("_")
-    .map(p => {
+    .map((p, i) => {
       //has preset mapping?
       if (p in titlizeMap) {
         return titlizeMap[p];
       }
-      //automatically titlize
-      return p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
+      //automatically titlize first word
+      if (i === 0) {
+        return p.charAt(0).toUpperCase() + p.slice(1);
+      }
+      //leave the rest as lowercase
+      return p;
     })
     .join(" ");

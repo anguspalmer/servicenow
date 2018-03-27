@@ -75,6 +75,7 @@ const snColumnMap = {
   name: "element",
   type: "internal_type",
   label: "column_label",
+  max_length: "max_length",
   reference_table: "reference",
   reference_field: false
 };

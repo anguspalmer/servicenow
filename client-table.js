@@ -215,6 +215,10 @@ module.exports = class ServiceNowClientTable {
       } else {
         parentSysID = await this.getTableSysID(parent);
       }
+      let spec = await this.get(parentSysID);
+      if (!spec.is_extendable) {
+        throw `Parent table (${spec.name}) is not extendable`;
+      }
     }
     let table = {
       name,
