@@ -1,5 +1,4 @@
 const sync = require("sync");
-
 const { cache } = require("cache");
 const { one, isGUID, titlize } = require("./util");
 const { snColumn } = require("./util-table");
@@ -35,10 +34,9 @@ module.exports = class ServiceNowClientTable {
       columns: {}
     };
     //add columns from entire hierarchy
-    let curr = rawTable;
-    while (curr) {
-      for (let k in curr.columns) {
-        let raw = curr.columns[k];
+    while (true) {
+      for (let k in rawTable.columns) {
+        let raw = rawTable.columns[k];
         let id = raw.element;
         if (!id) {
           throw `Column has no name`;
@@ -46,16 +44,23 @@ module.exports = class ServiceNowClientTable {
         //already defined?
         if (id in table.columns) {
           let col = table.columns[id];
+          //any column found twice is "overridden"
           if (!id.startsWith("sys_")) {
             col.overridden = true;
           }
-          col.table = curr.name;
+          //use first choice map found
+          if (!col.choice_map && raw.choice_map) {
+            col.choice_map = raw.choice_map;
+          }
+          //use LAST parent (source parent)
+          col.table = rawTable.name;
           continue;
         }
         let col = {};
         col.name = id;
         col.label = raw.column_label;
-        col.table = curr.name;
+        col.table = rawTable.name;
+        col.choice_map = raw.choice_map;
         for (let k in raw) {
           let v = raw[k];
           //exclude some
@@ -84,6 +89,8 @@ module.exports = class ServiceNowClientTable {
           } else if (k === "reference") {
             k = "reference_table";
             v = v.value;
+          } else if (typeof v === "object" && v.value) {
+            v = v.value;
           }
           //copy over all 'true' flags, numbers and strings
           //all numbers
@@ -98,14 +105,16 @@ module.exports = class ServiceNowClientTable {
         }
         table.columns[id] = col;
       }
-      curr = curr.super_class;
-      //note all parent tables
-      if (curr) {
-        if (!table.parent) {
-          table.parent = curr.name;
-        }
-        table.parents.push(curr.name);
+      //has another parent?
+      let nextTable = rawTable.super_class;
+      if (!nextTable) {
+        break;
       }
+      rawTable = nextTable;
+      if (!table.parent) {
+        table.parent = rawTable.name;
+      }
+      table.parents.push(rawTable.name);
     }
     //"pretty" table information
     return table;
@@ -134,26 +143,47 @@ module.exports = class ServiceNowClientTable {
     if (!table) {
       return null;
     }
-    //fetch columns
-    let columnList = await this.client.do({
-      url: `/v2/table/sys_dictionary`,
-      params: { sysparm_query: `name=${table.name}` }
-    });
+    //wait on a few promises and map the results
+    let [columnList, choiceList] = await sync.wait([
+      this.client.do({
+        url: `/v2/table/sys_dictionary`,
+        params: { sysparm_query: `name=${table.name}` }
+      }),
+      this.client.do({
+        url: `/v2/table/sys_choice`,
+        params: { sysparm_query: `name=${table.name}` }
+      })
+    ]);
+    //extract and group choice fields
+    let choices = {};
+    for (let ch of choiceList) {
+      let id = ch.element;
+      let col = choices[id];
+      if (!col) {
+        col = {};
+        choices[id] = col;
+      }
+      col[ch.value] = ch.label;
+    }
     //validate table schema
     let columns = {};
-    columnList.forEach(c => {
+    for (let c of columnList) {
       //skip null columns (seem to be "collection")
       if (c.sys_update_name === `sys_dictionary_${c.name}_null`) {
-        return;
+        continue;
       }
       //all should have a column id...
       let id = c.element;
       if (!id) {
         throw `Expected "element" property to be set`;
       }
+      //add actual choice list where possible
+      if (id in choices) {
+        c.choice_map = choices[id];
+      }
       //validate column schema
       columns[id] = c;
-    });
+    }
     table.columns = columns;
     //recurse into superclass
     if (table.super_class) {

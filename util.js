@@ -145,30 +145,36 @@ exports.convertSN = (schema, obj) => {
   if (!obj || typeof obj !== "object") {
     throw `Invalid object`;
   }
+  //values must be strings.
+  //values must be either defined or not.
+  //if undefined, empty string, otherwise defined
   let row = {};
   for (let k in schema) {
     let s = schema[k];
-    let v = obj[k];
-    //must have schema and value
-    if (v === undefined || v === "") {
+    //skip missing fields
+    if (!(k in obj)) {
       continue;
     }
+    let v = obj[k];
     //change schema type => string
     let t = s.type;
-    if (v === null) {
-      //servicenow api returns "" for all null / empty / blank fields
-      v = "";
-    } else if (t === "boolean") {
+    //check boolean first, ensures always defined (0 or 1)
+    if (t === "boolean") {
       if (typeof v === "string") {
         v = v === "true";
       } else if (typeof v === "number") {
         v = v === 1;
+      } else if (v === null) {
+        v = false;
       }
       if (typeof v !== "boolean") {
         throw `"${k}" expected boolean "${v}"`;
       }
       //servicenow api returns booleans as 1 or 0
       v = `${v ? 1 : 0}`;
+    } else if (v === null || v === undefined) {
+      //undefined values are the empty string.
+      v = "";
     } else if (t === "decimal" || t === "float") {
       if (typeof v !== "number") {
         throw `"${k}" expected number "${v}"`;
@@ -182,10 +188,14 @@ exports.convertSN = (schema, obj) => {
       }
       v = `${Math.round(v)}`;
     } else if (t == "string") {
+      //convert number to string
+      if (typeof v === "number") {
+        v = String(v);
+      }
       //trim length
-      if (s.maxLength && v.length > s.maxLength) {
+      if (s.max_length && v.length > s.max_length) {
         console.log(`<WARN> Truncated column ${k} with length  ${v.length}`);
-        v = v.slice(0, s.maxLength);
+        v = v.slice(0, s.max_length);
       }
     } else if (t === "glide_date_time") {
       if (!(v instanceof Date)) {
@@ -195,14 +205,13 @@ exports.convertSN = (schema, obj) => {
       v = v
         .toISOString()
         .replace("T", " ")
-        .replace("Z", "");
-    } else if (typeof v !== "string") {
+        .replace(".000Z", "");
+    }
+    //sanity check
+    if (typeof v !== "string") {
       throw `"${k}" expected string (found type "${t}" with value "${v}")`;
     }
-    //number fields really are null, not empty string
-    if (v === "" && (t === "decimal" || t === "float" || t === "integer")) {
-      continue;
-    }
+    //ready!
     row[k] = v;
   }
   return row;
@@ -229,7 +238,8 @@ const titlizeMap = {
   ci: "CI",
   ha: "HA",
   rest: "REST",
-  soap: "SOAP"
+  soap: "SOAP",
+  lun: "LUN"
 };
 
 exports.titlize = slug =>

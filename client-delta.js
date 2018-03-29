@@ -108,21 +108,25 @@ module.exports = class ServiceNowClientTable {
       let payload = {};
       let changed = false;
       for (let k in incomingRow) {
+        let s = schema[k];
         let incomingVal = incomingRow[k];
         let existingVal = existingRow[k];
+        //values are all strings.
+        //values are all either defined or not.
+        //undefined values are the empty string.
         if (incomingVal === undefined) {
-          continue;
+          incomingVal = "";
         }
         if (existingVal === undefined) {
           existingVal = "";
         }
-        if (
-          existingVal === undefined ||
-          JSON.stringify(incomingVal) !== JSON.stringify(existingVal)
-        ) {
+        //compare using their
+        if (JSON.stringify(incomingVal) !== JSON.stringify(existingVal)) {
           changed = true;
           payload[k] = incomingVal;
-          this.log(`DEBUG: ${cid}: ${k}: '${existingVal}' => '${incomingVal}'`);
+          this.log(
+            `DEBUG: ${tableName}: ${cid}: ${k}: '${existingVal}' => '${incomingVal}'`
+          );
         }
       }
       if (changed) {
@@ -187,7 +191,7 @@ module.exports = class ServiceNowClientTable {
     });
     //update all
     await sync.each(API_CONCURRENCY, pending.update, async row => {
-      //perform creation
+      //perform update
       await this.client.update(tableName, row);
       //mark 1 action done
       if (status) {
@@ -201,7 +205,7 @@ module.exports = class ServiceNowClientTable {
         //"delete" existing
         await this.client.update(tableName, row);
       } else {
-        //delete!!! existing
+        //permanently delete existing
         await this.client.delete(tableName, row);
       }
       //mark 1 action done
