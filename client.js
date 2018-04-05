@@ -496,7 +496,7 @@ module.exports = class ServiceNowClient {
       let sys_id = row;
       row = { sys_id };
     }
-    if (!row.sys_id) {
+    if (!row || !row.sys_id) {
       throw `row requires "sys_id"`;
     }
     return await this.do({

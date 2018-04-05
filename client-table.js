@@ -376,13 +376,7 @@ module.exports = class ServiceNowClientTable {
       //create new choice
       if (!existingChoice) {
         this.log("create choice list:", newChoice);
-        let c = await this.client.create("sys_choice", newChoice);
-        console.log(c);
-        //HACK: create cannot set sys_domain, so we follow up with an update
-        await this.client.update("sys_choice", {
-          sys_id: c.sys_id,
-          sys_domain: "global"
-        });
+        await this.client.create("sys_choice", newChoice);
         continue;
       }
       if (isEqual(existingChoice, newChoice)) {
