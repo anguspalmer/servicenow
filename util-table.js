@@ -25,10 +25,10 @@ exports.expandTable = table => {
 //expand short-hand js column
 exports.expandColumn = col => {
   if (!col.name) {
-    throw `Missing column "name"`;
+    throw `expand-column: "name" is missing`;
   }
   if (typeof col.type !== "string") {
-    throw `Column "${col.name}" is missing the "type" property`;
+    throw `expand-column: "${col.name}" is missing the "type" property`;
   }
   col.type = col.type.toLowerCase();
   if (!col.label) {
@@ -40,9 +40,12 @@ exports.expandColumn = col => {
     case "text":
       default_length = 65535;
       break;
+    case "url":
     case "string":
       default_length = 255;
       break;
+    case "bigint":
+      col.type = "long";
     case "integer":
     case "float":
     case "decimal":
@@ -58,13 +61,33 @@ exports.expandColumn = col => {
       default_length = 32;
       break;
     default:
-      throw `Unknown column type "${col.type}"`;
+      throw `expand-column: unknown type "${col.type}"`;
   }
   if (!col.max_length) {
     col.max_length = default_length;
   }
   if (col.type === "reference" && !col.reference_table) {
-    throw `Column "${col.name}" is missing the "reference_table" property`;
+    throw `expand-column: "${col.name}" is missing` +
+      ` the "reference_table" property`;
+  }
+  if (!col.choice_map && col.choice) {
+    throw `expand-column: "${col.name}" missing "choice_map"`;
+  }
+  if (col.choice_map && !col.choice) {
+    col.choice = "nullable";
+  }
+  if (typeof col.choice === "string") {
+    let v = col.choice;
+    if (v === "nullable") {
+      v = 1;
+    } else if (v === "suggestion") {
+      v = 2;
+    } else if (v === "required") {
+      v = 3;
+    } else {
+      throw `expand-column: unknown choice string "${v}"`;
+    }
+    col.choice = v;
   }
 };
 
@@ -76,6 +99,7 @@ const snColumnMap = {
   type: "internal_type",
   label: "column_label",
   max_length: "max_length",
+  choice: "choice",
   reference_table: "reference",
   reference_field: false
 };

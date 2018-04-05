@@ -490,6 +490,10 @@ module.exports = class ServiceNowClient {
    * @param {object} row The target object.
    */
   async delete(tableName, row) {
+    if (typeof row === "string") {
+      let sys_id = row;
+      row = { sys_id };
+    }
     if (!row.sys_id) {
       throw `row requires "sys_id"`;
     }

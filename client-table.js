@@ -1,4 +1,5 @@
 const sync = require("sync");
+const isEqual = require("lodash.isequal");
 const { cache } = require("cache");
 const { one, isGUID, titlize } = require("./util");
 const { snColumn } = require("./util-table");
@@ -20,21 +21,30 @@ module.exports = class ServiceNowClientTable {
     if (!tableNameOrSysID) {
       throw `Missing table name / table sys_id`;
     }
-    let rawTable = await this.getRaw(tableNameOrSysID);
-    if (rawTable === null) {
+    let rootTable = await this.getRaw(tableNameOrSysID);
+    if (rootTable === null) {
       return null; //not found
     }
     let table = {
-      name: rawTable.name,
-      label: rawTable.label,
-      is_extendable: rawTable.is_extendable,
-      sys_id: rawTable.sys_id,
+      name: rootTable.name,
+      label: rootTable.label,
+      is_extendable: rootTable.is_extendable,
+      sys_id: rootTable.sys_id,
       parent: undefined,
       parents: [],
       columns: {}
     };
     //add columns from entire hierarchy
-    while (true) {
+    let rawTable = rootTable;
+    while (rawTable) {
+      //add parent tables
+      if (rawTable !== rootTable) {
+        if (!table.parent) {
+          table.parent = rawTable.name;
+        }
+        table.parents.push(rawTable.name);
+      }
+      //add columns from this table
       for (let k in rawTable.columns) {
         let raw = rawTable.columns[k];
         let id = raw.element;
@@ -82,15 +92,21 @@ module.exports = class ServiceNowClientTable {
           ) {
             continue;
           }
-          //transform
+          //transforms
           if (k === "internal_type") {
             k = "type";
-            v = v.value.toLowerCase();
+            v = v.toLowerCase();
           } else if (k === "reference") {
             k = "reference_table";
-            v = v.value;
-          } else if (typeof v === "object" && v.value) {
-            v = v.value;
+          }
+          if (k === "choice") {
+            if (v === 1) {
+              v = "nullable";
+            } else if (v === 2) {
+              v = "suggestion";
+            } else if (v === 3) {
+              v = "required";
+            }
           }
           //copy over all 'true' flags, numbers and strings
           //all numbers
@@ -106,15 +122,7 @@ module.exports = class ServiceNowClientTable {
         table.columns[id] = col;
       }
       //has another parent?
-      let nextTable = rawTable.super_class;
-      if (!nextTable) {
-        break;
-      }
-      rawTable = nextTable;
-      if (!table.parent) {
-        table.parent = rawTable.name;
-      }
-      table.parents.push(rawTable.name);
+      rawTable = rawTable.super_class;
     }
     //"pretty" table information
     return table;
@@ -130,13 +138,19 @@ module.exports = class ServiceNowClientTable {
     let table;
     if (isGUID(tableNameOrSysID)) {
       table = await this.client.do({
-        url: `/v2/table/sys_db_object/${tableNameOrSysID}`
+        url: `/v2/table/sys_db_object/${tableNameOrSysID}`,
+        params: {
+          sysparm_exclude_reference_link: true
+        }
       });
     } else {
       table = one(
         await this.client.do({
           url: `/v2/table/sys_db_object`,
-          params: { sysparm_query: `name=${tableNameOrSysID}` }
+          params: {
+            sysparm_exclude_reference_link: true,
+            sysparm_query: `name=${tableNameOrSysID}`
+          }
         })
       );
     }
@@ -147,21 +161,27 @@ module.exports = class ServiceNowClientTable {
     let [columnList, choiceList] = await sync.wait([
       this.client.do({
         url: `/v2/table/sys_dictionary`,
-        params: { sysparm_query: `name=${table.name}` }
+        params: {
+          sysparm_exclude_reference_link: true,
+          sysparm_query: `name=${table.name}`
+        }
       }),
       this.client.do({
         url: `/v2/table/sys_choice`,
-        params: { sysparm_query: `name=${table.name}` }
+        params: {
+          sysparm_exclude_reference_link: true,
+          sysparm_query: `name=${table.name}`
+        }
       })
     ]);
     //extract and group choice fields
-    let choices = {};
+    let tableChoices = {};
     for (let ch of choiceList) {
       let id = ch.element;
-      let col = choices[id];
+      let col = tableChoices[id];
       if (!col) {
         col = {};
-        choices[id] = col;
+        tableChoices[id] = col;
       }
       col[ch.value] = ch.label;
     }
@@ -178,8 +198,8 @@ module.exports = class ServiceNowClientTable {
         throw `Expected "element" property to be set`;
       }
       //add actual choice list where possible
-      if (id in choices) {
-        c.choice_map = choices[id];
+      if (id in tableChoices) {
+        c.choice_map = tableChoices[id];
       }
       //validate column schema
       columns[id] = c;
@@ -187,7 +207,7 @@ module.exports = class ServiceNowClientTable {
     table.columns = columns;
     //recurse into superclass
     if (table.super_class) {
-      table.super_class = await this.getRaw(table.super_class.value);
+      table.super_class = await this.getRaw(table.super_class);
     }
     //ready
     return table;
@@ -288,7 +308,12 @@ module.exports = class ServiceNowClientTable {
     col.name = tableName;
     //ready!
     this.log(`table "${tableName}": add column "${col.element}"`, col);
-    return await this.client.create("sys_dictionary", col);
+    let newCol = await this.client.create("sys_dictionary", col);
+    //update success, has choice list? sync that too
+    if (newCol.choice && columnSpec.choice_map) {
+      await this.syncChoices(tableName, newCol.sys_id, columnSpec.choice_map);
+    }
+    return newCol;
   }
 
   /**
@@ -298,11 +323,86 @@ module.exports = class ServiceNowClientTable {
    */
   async updateColumn(tableName, columnSpec) {
     let col = snColumn(columnSpec);
-    if (!/^u_/.test(col.element)) {
+    let userColumn = /^u_/.test(col.element);
+    let syncChoices = Boolean(columnSpec.choice_map);
+    if (!syncChoices && !userColumn) {
       throw `Column name (${col.element}) must begin with "u_"`;
     }
-    this.log(`table "${tableName}": update column "${col.element}"`);
-    return await this.client.update("sys_dictionary", col);
+    //update user column
+    if (userColumn) {
+      this.log(`table "${tableName}": update column "${col.element}"`);
+      await this.client.update("sys_dictionary", col);
+    }
+    //update choice list
+    if (syncChoices) {
+      await this.syncChoices(tableName, col.element, columnSpec.choice_map);
+    }
+    return true;
+  }
+
+  async syncChoices(tableName, colName, choiceMap) {
+    if (!choiceMap) {
+      throw `Column (${colName}) missing choice map`;
+    }
+    this.log(`table "${tableName}": update column "${colName}" choices`);
+    let choiceList = await this.client.do({
+      url: `/v2/table/sys_choice`,
+      params: {
+        sysparm_exclude_reference_link: true,
+        sysparm_query: `name=${tableName}^element=${colName}`
+      }
+    });
+    for (let value in choiceMap) {
+      let label = choiceMap[value];
+      //find existing choice
+      let existingChoice = null;
+      for (let i = 0; i < choiceList.length; i++) {
+        let c = choiceList[i];
+        if (c.value === value) {
+          existingChoice = c;
+          choiceList.splice(i, 1);
+          break;
+        }
+      }
+      //new choice
+      let newChoice = {
+        name: tableName,
+        element: colName,
+        value,
+        label,
+        sys_domain: "global",
+        inactive: false
+      };
+      //create new choice
+      if (!existingChoice) {
+        this.log("create choice list:", newChoice);
+        let c = await this.client.create("sys_choice", newChoice);
+        console.log(c);
+        //HACK: create cannot set sys_domain, so we follow up with an update
+        await this.client.update("sys_choice", {
+          sys_id: c.sys_id,
+          sys_domain: "global"
+        });
+        continue;
+      }
+      if (isEqual(existingChoice, newChoice)) {
+        continue; //no changes!
+      }
+      //update choice
+      let updateChoice = {
+        sys_id: existingChoice.sys_id,
+        ...newChoice
+      };
+      this.log("update choice list:", updateChoice);
+      await this.client.update("sys_choice", updateChoice);
+    }
+    //delete remaining choices
+    for (let c of choiceList) {
+      this.log("delete choice list:", c);
+      await this.client.delete("sys_choice", c);
+    }
+    //syncd!
+    return true;
   }
 
   /**
@@ -314,9 +414,9 @@ module.exports = class ServiceNowClientTable {
     if (!/^u_/.test(columnName)) {
       throw `Column name (${columnName}) must begin with "u_"`;
     }
-    let sysID = await this.getTableColumnSysID(tableName, columnName);
+    let sysId = await this.getTableColumnSysID(tableName, columnName);
     this.log(`table "${tableName}": delete column "${columnName}"`);
-    return await this.client.delete("sys_dictionary", { sys_id: sysID });
+    return await this.client.delete("sys_dictionary", sysId);
   }
 
   /**
@@ -411,19 +511,44 @@ module.exports = class ServiceNowClientTable {
       }
       //already exists? need updating?
       let ecol = existingColumns[name];
-      let changed = false;
       let ncol = {
         name: name,
         sys_id: ecol.sys_id
       };
       let detail = [];
       //update these columns
-      for (let k of ["label", "max_length"]) {
-        if (k in col && col[k] !== ecol[k]) {
-          changed = true;
-          ncol[k] = col[k];
-          detail.push(`"${k}" from "${ecol[k]}" to "${col[k]}"`);
+      let changedField = false;
+      for (let k of ["label", "max_length", "choice"]) {
+        let v = ecol[k];
+        if (k === "choice" && "choice" in ecol) {
+          if (v === "nullable") {
+            v = 1;
+          } else if (v === "suggestion") {
+            v = 2;
+          } else if (v === "required") {
+            v = 3;
+          } else {
+            throw `sync-column: unknown choice string "${v}"`;
+          }
         }
+        if (k in col && col[k] !== v) {
+          changedField = true;
+          ncol[k] = col[k];
+          detail.push(`"${k}" from "${v}" to "${col[k]}"`);
+        }
+      }
+      //sync choice map?
+      let changedChoices = false;
+      if (col.choice_map) {
+        if (!isEqual(col.choice_map, ecol.choice_map)) {
+          detail.push(`sync choice list`);
+          changedChoices = true;
+          ncol.choice_map = col.choice_map;
+        }
+      }
+      let changed = changedField || changedChoices;
+      if (!changed) {
+        continue;
       }
       //ensure these columns match
       let match = true;
@@ -441,14 +566,17 @@ module.exports = class ServiceNowClientTable {
           break;
         }
       }
-      if (!match || !changed) {
+      if (!match) {
         continue;
       }
+      //ensure changes are allowed
       let prevent = null;
-      if (tableName !== ecol.table) {
-        prevent = `column exists on parent table (${ecol.table})`;
-      } else if (!name.startsWith("u_")) {
-        prevent = `column is out-of-the-box`;
+      if (changedField) {
+        if (tableName !== ecol.table) {
+          prevent = `column exists on parent table (${ecol.table})`;
+        } else if (!name.startsWith("u_")) {
+          prevent = `column is out-of-the-box`;
+        }
       }
       if (prevent) {
         pending[dmId] = {
@@ -460,7 +588,7 @@ module.exports = class ServiceNowClientTable {
         };
         continue;
       }
-      //changed valid fields, update!
+      //changes are valid!!! update!
       pending[dmId] = {
         name,
         type: "update",

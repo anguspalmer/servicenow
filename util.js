@@ -237,6 +237,8 @@ const titlizeMap = {
   dns: "DNS",
   ci: "CI",
   ha: "HA",
+  ssd: "SSD",
+  url: "URL",
   rest: "REST",
   soap: "SOAP",
   lun: "LUN"
