@@ -406,10 +406,12 @@ module.exports = class ServiceNowClient {
       pages.push(i);
     }
     let datas = await sync.map(4, pages, async page => {
-      this.log(
-        `GET #${count} records from "${tableName}" (page ${page +
-          1}/${totalPages})`
-      );
+      if (totalPages > 1) {
+        this.log(
+          `GET #${count} records from "${tableName}" (page ${page +
+            1}/${totalPages})`
+        );
+      }
       let results = await this.do({
         method: "GET",
         url: `/v2/table/${tableName}`,
