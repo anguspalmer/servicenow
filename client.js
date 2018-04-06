@@ -90,7 +90,7 @@ module.exports = class ServiceNowClient {
     if (!url) {
       throw `Missing URL`;
     }
-    if (this.readOnly) {
+    if (isWrite && this.readOnly) {
       throw `Request (${method} ${url}) blocked, read-only mode is enabled`;
     }
     //validate URL (must use versioned api)

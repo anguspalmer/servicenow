@@ -176,14 +176,20 @@ exports.convertSN = (schema, obj) => {
       //undefined values are the empty string.
       v = "";
     } else if (t === "decimal" || t === "float") {
-      if (typeof v !== "number") {
+      if (typeof v === "string") {
+        v = parseFloat(v);
+      }
+      if (typeof v !== "number" || isNaN(v)) {
         throw `"${k}" expected number "${v}"`;
       }
       // let places = 2
       //TODO calc number of places, scope
       v = `${Math.round(v * 100) / 100}`; //2 places
-    } else if (t === "integer") {
-      if (typeof v !== "number") {
+    } else if (t === "integer" || t === "long") {
+      if (typeof v === "string") {
+        v = parseInt(v, 10);
+      }
+      if (typeof v !== "number" || isNaN(v)) {
         throw `"${k}" expected number "${v}"`;
       }
       v = `${Math.round(v)}`;
@@ -209,7 +215,7 @@ exports.convertSN = (schema, obj) => {
     }
     //sanity check
     if (typeof v !== "string") {
-      throw `"${k}" expected string (found type "${t}" with value "${v}")`;
+      throw `"${k}" expected string (found type '${t}/${typeof v}' with value '${v}')`;
     }
     //ready!
     row[k] = v;

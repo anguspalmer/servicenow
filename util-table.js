@@ -89,6 +89,11 @@ exports.expandColumn = col => {
     }
     col.choice = v;
   }
+  if ("syncback" in col) {
+    if (typeof col.syncback !== "boolean") {
+      throw `expand-column: "syncback" must be a boolean`;
+    }
+  }
 };
 
 //convert js column to sn column
