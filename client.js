@@ -46,6 +46,7 @@ module.exports = class ServiceNowClient {
     this.defaultParams = {
       sysparm_exclude_reference_link: true
     };
+    this.readOnly = config.readOnly === true;
     this.enableCache = config.cache === true;
     this.enableDebug = config.debug === true;
     this.fake = fake;
@@ -88,6 +89,9 @@ module.exports = class ServiceNowClient {
     let isWrite = !isRead;
     if (!url) {
       throw `Missing URL`;
+    }
+    if (this.readOnly) {
+      throw `Request (${method} ${url}) blocked, read-only mode is enabled`;
     }
     //validate URL (must use versioned api)
     let hasData = Boolean(request.data);
