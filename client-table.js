@@ -330,7 +330,7 @@ module.exports = class ServiceNowClientTable {
     }
     //update user column
     if (userColumn) {
-      this.log(`table "${tableName}": update column "${col.element}"`);
+      this.log(`table "${tableName}": update column "${col.element}"`, col);
       await this.client.update("sys_dictionary", col);
     }
     //update choice list
@@ -344,7 +344,7 @@ module.exports = class ServiceNowClientTable {
     if (!choiceMap) {
       throw `Column (${colName}) missing choice map`;
     }
-    this.log(`table "${tableName}": update column "${colName}" choices`);
+    this.log(`table "${tableName}": update column "${colName}": sync choices`);
     let choiceList = await this.client.do({
       url: `/v2/table/sys_choice`,
       params: {

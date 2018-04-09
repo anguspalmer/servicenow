@@ -105,6 +105,7 @@ const snColumnMap = {
   label: "column_label",
   max_length: "max_length",
   choice: "choice",
+  choice_map: false,
   reference_table: "reference",
   reference_field: false
 };
@@ -122,7 +123,9 @@ exports.snColumn = js => {
     if (newk === false) {
       continue;
     } else if (!newk) {
-      console.log(`servicenow: util-list: no column mapped to "${k}"`);
+      console.log(
+        `WARNING: servicenow: util-table: no column mapped to "${k}"`
+      );
       continue;
     }
     sn[newk] = v;
