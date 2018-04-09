@@ -171,13 +171,20 @@ module.exports = class ServiceNowClient {
     if (resp.status === 204 || resp.status === 201) {
       return true;
     }
-    //got response
+    //has data
     let { data } = resp;
     if (!data) {
       throw `Expected response data`;
     }
+    //failed status?
+    if (resp.status !== 200) {
+      if (resp.status === 403) {
+        throw `Unauthorised (user ${this.username}), data: ${data}`;
+      }
+      throw `Unexpected error (${resp.status}), data: ${data}`;
+    }
     //validate type
-    let contentType = resp.headers["content-type"];
+    let contentType = resp.headers["content-type"] || "";
     if (isXML && !contentType.startsWith("text/xml")) {
       throw `Expected XML (got ${contentType})`;
     } else if (isJSON && !contentType.startsWith("application/json")) {
@@ -500,7 +507,7 @@ module.exports = class ServiceNowClient {
       let sys_id = row;
       row = { sys_id };
     }
-    if (!row || !row.sys_id) {
+    if (!row.sys_id) {
       throw `row requires "sys_id"`;
     }
     return await this.do({

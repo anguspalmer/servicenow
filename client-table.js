@@ -308,12 +308,12 @@ module.exports = class ServiceNowClientTable {
     col.name = tableName;
     //ready!
     this.log(`table "${tableName}": add column "${col.element}"`, col);
-    let newCol = await this.client.create("sys_dictionary", col);
+    await this.client.create("sys_dictionary", col);
     //update success, has choice list? sync that too
-    if (newCol.choice && columnSpec.choice_map) {
-      await this.syncChoices(tableName, newCol.sys_id, columnSpec.choice_map);
+    if (columnSpec.choice && columnSpec.choice_map) {
+      await this.syncChoices(tableName, col.element, columnSpec.choice_map);
     }
-    return newCol;
+    return true;
   }
 
   /**
