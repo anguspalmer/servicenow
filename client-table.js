@@ -620,6 +620,105 @@ module.exports = class ServiceNowClientTable {
     return pending;
   }
 
+  async syncDataPolicies(tableName, columnNames, opts = {}) {
+    if (!tableName) {
+      throw `Missing table name`;
+    } else if (!/^u_/.test(tableName)) {
+      throw `Table name (${tableName}) must begin with "u_"`;
+    }
+    let { mandatory = "ignore", readOnly = "true", doDeletes = false } = opts;
+    if (typeof columnNames === "string") {
+      columnNames = [columnNames];
+    } else if (!Array.isArray(columnNames)) {
+      throw `Expected array of column`;
+    } else if (columnNames.length === 0) {
+      return; //successfully synced all provided columns!
+    }
+    this.log(`table "${tableName}": sync data policies`);
+    const getTablePolicy = async () =>
+      one(
+        await this.client.do({
+          url: `/v2/table/sys_data_policy2`,
+          params: {
+            sysparm_exclude_reference_link: true,
+            sysparm_query:
+              `model_table=${tableName}^` +
+              `sys_created_by=${this.client.username}`
+          }
+        })
+      );
+    let tablePolicy = await getTablePolicy();
+    //table policy missing! create it
+    if (!tablePolicy) {
+      this.log(`table "${tableName}": create data policy`);
+      await this.client.create("sys_data_policy2", {
+        model_table: tableName,
+        conditions: `sys_created_by=${this.client.username}^EQ`
+      });
+      tablePolicy = await getTablePolicy();
+    }
+    if (!tablePolicy || !tablePolicy.sys_id) {
+      throw `This should not happen`;
+    }
+    //delta sync policies
+    //fetch policies for this table, created by this user!
+    const existingRules = await this.client.do({
+      url: `/v2/table/sys_data_policy_rule`,
+      params: {
+        sysparm_exclude_reference_link: true,
+        sysparm_query: `table=${tableName}`
+      }
+    });
+    const newRules = columnNames.map(columnName => ({
+      table: tableName,
+      field: columnName,
+      disabled: readOnly,
+      mandatory
+    }));
+    //perform diff
+    return sync.diff({
+      prev: existingRules,
+      next: newRules,
+      index: "field",
+      create: async newRule => {
+        newRule.sys_data_policy = tablePolicy.sys_id;
+        await this.client.create("sys_data_policy_rule", newRule);
+      },
+      equal: async (existingRule, newRule) => {
+        for (let key in newRule) {
+          if (String(newRule[key]) != String(existingRule[key])) {
+            console.log(
+              "NOT",
+              key,
+              String(newRule[key]),
+              String(existingRule[key])
+            );
+            return false;
+          }
+        }
+        return true;
+      },
+      update: async (newRule, existingRule) => {
+        this.log(
+          `table "${tableName}": "${columnName}": update data policy rule`
+        );
+        await this.client.update("sys_data_policy_rule", {
+          sys_id: existingRule.sys_id,
+          ...newRule
+        });
+      },
+      delete: async existingRule => {
+        //dont delete policies not created by us
+        if (doDeletes && existingRule.sys_created_by === this.client.username) {
+          this.log(
+            `table "${tableName}": "${existingRule.field}": delete data policy`
+          );
+          await this.client.delete("sys_data_policy_rule", existingRule);
+        }
+      }
+    });
+  }
+
   /**
    * Commit a set of pending changes to a servicenow table.
    * @param {object} pending The pending operations.

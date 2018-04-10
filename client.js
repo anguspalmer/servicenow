@@ -474,6 +474,11 @@ module.exports = class ServiceNowClient {
    * @param {object} row The target object.
    */
   async create(tableName, row) {
+    if (!row) {
+      throw `No row data provided`;
+    } else if (row.sys_id) {
+      throw `new rows cannot contain "sys_id`;
+    }
     return await this.do({
       method: "POST",
       url: `/v2/table/${tableName}`,

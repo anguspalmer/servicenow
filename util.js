@@ -247,7 +247,8 @@ const titlizeMap = {
   url: "URL",
   rest: "REST",
   soap: "SOAP",
-  lun: "LUN"
+  lun: "LUN",
+  qos: "QoS"
 };
 
 exports.titlize = slug =>
