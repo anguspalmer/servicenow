@@ -180,39 +180,49 @@ module.exports = class ServiceNowClientTable {
         pending.create.length + pending.update.length + pending.delete.length
       );
     }
-    //create all
-    await sync.each(API_CONCURRENCY, pending.create, async row => {
-      //perform creation
-      await this.client.create(tableName, row);
-      //mark 1 action done
-      if (status) {
-        status.done();
-      }
-    });
-    //update all
-    await sync.each(API_CONCURRENCY, pending.update, async row => {
-      //perform update
-      await this.client.update(tableName, row);
-      //mark 1 action done
-      if (status) {
-        status.done();
-      }
-    });
-    //update all
-    await sync.each(API_CONCURRENCY, pending.delete, async row => {
-      //perform deletion
-      if (deletedFlag && deletedFlag in row) {
-        //"delete" existing
+    //de-activate data policy
+    await this.client.table.toggleDataPolicy(tableName, false);
+    //try-catch to ensure we always re-active data policy
+    try {
+      //create all
+      await sync.each(API_CONCURRENCY, pending.create, async row => {
+        //perform creation
+        await this.client.create(tableName, row);
+        //mark 1 action done
+        if (status) {
+          status.done();
+        }
+      });
+      //update all
+      await sync.each(API_CONCURRENCY, pending.update, async row => {
+        //perform update
         await this.client.update(tableName, row);
-      } else {
-        //permanently delete existing
-        await this.client.delete(tableName, row);
-      }
-      //mark 1 action done
-      if (status) {
-        status.done();
-      }
-    });
+        //mark 1 action done
+        if (status) {
+          status.done();
+        }
+      });
+      //delete all
+      await sync.each(API_CONCURRENCY, pending.delete, async row => {
+        //perform deletion
+        if (deletedFlag && deletedFlag in row) {
+          //"delete" existing
+          await this.client.update(tableName, row);
+        } else {
+          //permanently delete existing
+          await this.client.delete(tableName, row);
+        }
+        //mark 1 action done
+        if (status) {
+          status.done();
+        }
+      });
+    } catch (err) {
+      throw err;
+    } finally {
+      //de-activate data policy
+      await this.client.table.toggleDataPolicy(tableName, true);
+    }
     //provide merge results
     return {
       rowsMatched,

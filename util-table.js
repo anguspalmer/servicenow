@@ -94,6 +94,11 @@ exports.expandColumn = col => {
       throw `expand-column: "syncback" must be a boolean`;
     }
   }
+  if ("data_policy" in col) {
+    if (col.data_policy !== "readonly" && col.data_policy !== "writable") {
+      throw `expand-column: "data_policy" must be a "readonly" or "writable"`;
+    }
+  }
 };
 
 //convert js column to sn column
@@ -105,9 +110,10 @@ const snColumnMap = {
   label: "column_label",
   max_length: "max_length",
   choice: "choice",
-  choice_map: false,
+  choice_map: false, //syncd separately
   reference_table: "reference",
-  reference_field: false
+  reference_field: false, //used in deltamerge
+  data_policy: false //syncd separately
 };
 
 exports.snColumn = js => {

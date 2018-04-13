@@ -70,6 +70,7 @@ module.exports = class ServiceNowClientTable {
         col.name = id;
         col.label = raw.column_label;
         col.table = rawTable.name;
+        col.data_policy = raw.data_policy;
         col.choice_map = raw.choice_map;
         for (let k in raw) {
           let v = raw[k];
@@ -158,7 +159,7 @@ module.exports = class ServiceNowClientTable {
       return null;
     }
     //wait on a few promises and map the results
-    let [columnList, choiceList] = await sync.wait([
+    let [columnList, choiceList, ruleList] = await sync.wait([
       this.client.do({
         url: `/v2/table/sys_dictionary`,
         params: {
@@ -170,39 +171,60 @@ module.exports = class ServiceNowClientTable {
         url: `/v2/table/sys_choice`,
         params: {
           sysparm_exclude_reference_link: true,
-          sysparm_query: `name=${table.name}`
+          sysparm_query: `name=${table.name}`,
+          sysparm_fields: "element,value,label"
+        }
+      }),
+      this.client.do({
+        url: `/v2/table/sys_data_policy_rule`,
+        params: {
+          sysparm_exclude_reference_link: true,
+          sysparm_query:
+            `table=${table.name}^` + `sys_created_by=${this.client.username}`,
+          sysparm_fields: "field,disabled"
         }
       })
     ]);
     //extract and group choice fields
-    let tableChoices = {};
-    for (let ch of choiceList) {
-      let id = ch.element;
+    const tableChoices = {};
+    for (const choice of choiceList) {
+      const id = choice.element;
       let col = tableChoices[id];
       if (!col) {
         col = {};
         tableChoices[id] = col;
       }
-      col[ch.value] = ch.label;
+      col[choice.value] = choice.label;
+    }
+    //extract and group rules
+    const columnDataPolicies = {};
+    for (const rule of ruleList) {
+      if (rule.disabled === "true") {
+        columnDataPolicies[rule.field] = "readonly";
+      }
     }
     //validate table schema
     let columns = {};
-    for (let c of columnList) {
+    for (let column of columnList) {
       //skip null columns (seem to be "collection")
-      if (c.sys_update_name === `sys_dictionary_${c.name}_null`) {
+      if (column.sys_update_name === `sys_dictionary_${column.name}_null`) {
         continue;
       }
       //all should have a column id...
-      let id = c.element;
+      let id = column.element;
       if (!id) {
         throw `Expected "element" property to be set`;
       }
       //add actual choice list where possible
       if (id in tableChoices) {
-        c.choice_map = tableChoices[id];
+        column.choice_map = tableChoices[id];
+      }
+      //add data policy settings where possible
+      if (id in columnDataPolicies) {
+        column.data_policy = columnDataPolicies[id];
       }
       //validate column schema
-      columns[id] = c;
+      columns[id] = column;
     }
     table.columns = columns;
     //recurse into superclass
@@ -307,11 +329,16 @@ module.exports = class ServiceNowClientTable {
     col.display = false;
     col.name = tableName;
     //ready!
-    this.log(`table "${tableName}": add column "${col.element}"`, col);
+    this.log(`table ${tableName}: add column "${col.element}"`, col);
     await this.client.create("sys_dictionary", col);
-    //update success, has choice list? sync that too
+    //create success, has choice list? sync that too
     if (columnSpec.choice && columnSpec.choice_map) {
-      await this.syncChoices(tableName, col.element, columnSpec.choice_map);
+      await this.syncChoiceList(tableName, col.element, columnSpec.choice_map);
+    }
+    //create data policy
+    if (columnSpec.data_policy) {
+      let readOnly = columnSpec.data_policy === "readonly";
+      await this.syncDataPolicies(tableName, { [col.element]: readOnly });
     }
     return true;
   }
@@ -324,78 +351,24 @@ module.exports = class ServiceNowClientTable {
   async updateColumn(tableName, columnSpec) {
     let col = snColumn(columnSpec);
     let userColumn = /^u_/.test(col.element);
-    let syncChoices = Boolean(columnSpec.choice_map);
-    if (!syncChoices && !userColumn) {
+    let syncColumn = Object.keys(col).length > 2;
+    if (syncColumn && !userColumn) {
       throw `Column name (${col.element}) must begin with "u_"`;
     }
     //update user column
-    if (userColumn) {
-      this.log(`table "${tableName}": update column "${col.element}"`, col);
+    if (syncColumn) {
+      this.log(`table ${tableName}: update column "${col.element}"`, col);
       await this.client.update("sys_dictionary", col);
     }
     //update choice list
-    if (syncChoices) {
-      await this.syncChoices(tableName, col.element, columnSpec.choice_map);
+    if (columnSpec.choice_map) {
+      await this.syncChoiceList(tableName, col.element, columnSpec.choice_map);
     }
-    return true;
-  }
-
-  async syncChoices(tableName, colName, choiceMap) {
-    if (!choiceMap) {
-      throw `Column (${colName}) missing choice map`;
+    //update data policy
+    if (columnSpec.data_policy) {
+      let readOnly = columnSpec.data_policy === "readonly";
+      await this.syncDataPolicies(tableName, { [col.element]: readOnly });
     }
-    this.log(`table "${tableName}": update column "${colName}": sync choices`);
-    let choiceList = await this.client.do({
-      url: `/v2/table/sys_choice`,
-      params: {
-        sysparm_exclude_reference_link: true,
-        sysparm_query: `name=${tableName}^element=${colName}`
-      }
-    });
-    for (let value in choiceMap) {
-      let label = choiceMap[value];
-      //find existing choice
-      let existingChoice = null;
-      for (let i = 0; i < choiceList.length; i++) {
-        let c = choiceList[i];
-        if (c.value === value) {
-          existingChoice = c;
-          choiceList.splice(i, 1);
-          break;
-        }
-      }
-      //new choice
-      let newChoice = {
-        name: tableName,
-        element: colName,
-        value,
-        label,
-        sys_domain: "global",
-        inactive: false
-      };
-      //create new choice
-      if (!existingChoice) {
-        this.log("create choice list:", newChoice);
-        await this.client.create("sys_choice", newChoice);
-        continue;
-      }
-      if (isEqual(existingChoice, newChoice)) {
-        continue; //no changes!
-      }
-      //update choice
-      let updateChoice = {
-        sys_id: existingChoice.sys_id,
-        ...newChoice
-      };
-      this.log("update choice list:", updateChoice);
-      await this.client.update("sys_choice", updateChoice);
-    }
-    //delete remaining choices
-    for (let c of choiceList) {
-      this.log("delete choice list:", c);
-      await this.client.delete("sys_choice", c);
-    }
-    //syncd!
     return true;
   }
 
@@ -409,7 +382,7 @@ module.exports = class ServiceNowClientTable {
       throw `Column name (${columnName}) must begin with "u_"`;
     }
     let sysId = await this.getTableColumnSysID(tableName, columnName);
-    this.log(`table "${tableName}": delete column "${columnName}"`);
+    this.log(`table ${tableName}: delete column "${columnName}"`);
     return await this.client.delete("sys_dictionary", sysId);
   }
 
@@ -535,12 +508,22 @@ module.exports = class ServiceNowClientTable {
       let changedChoices = false;
       if (col.choice_map) {
         if (!isEqual(col.choice_map, ecol.choice_map)) {
-          detail.push(`sync choice list`);
+          detail.push(`choice list`);
           changedChoices = true;
           ncol.choice_map = col.choice_map;
         }
       }
-      let changed = changedField || changedChoices;
+      //sync data policy
+      let changedDataPolicy = false;
+      if (col.data_policy !== ecol.data_policy) {
+        detail.push(
+          `data policy "${ecol.data_policy}" => "${col.data_policy}"`
+        );
+        changedDataPolicy = true;
+        ncol.data_policy = col.data_policy;
+      }
+      //anything changed?
+      let changed = changedField || changedChoices || changedDataPolicy;
       if (!changed) {
         continue;
       }
@@ -620,105 +603,6 @@ module.exports = class ServiceNowClientTable {
     return pending;
   }
 
-  async syncDataPolicies(tableName, columnNames, opts = {}) {
-    if (!tableName) {
-      throw `Missing table name`;
-    } else if (!/^u_/.test(tableName)) {
-      throw `Table name (${tableName}) must begin with "u_"`;
-    }
-    let { mandatory = "ignore", readOnly = "true", doDeletes = false } = opts;
-    if (typeof columnNames === "string") {
-      columnNames = [columnNames];
-    } else if (!Array.isArray(columnNames)) {
-      throw `Expected array of column`;
-    } else if (columnNames.length === 0) {
-      return; //successfully synced all provided columns!
-    }
-    this.log(`table "${tableName}": sync data policies`);
-    const getTablePolicy = async () =>
-      one(
-        await this.client.do({
-          url: `/v2/table/sys_data_policy2`,
-          params: {
-            sysparm_exclude_reference_link: true,
-            sysparm_query:
-              `model_table=${tableName}^` +
-              `sys_created_by=${this.client.username}`
-          }
-        })
-      );
-    let tablePolicy = await getTablePolicy();
-    //table policy missing! create it
-    if (!tablePolicy) {
-      this.log(`table "${tableName}": create data policy`);
-      await this.client.create("sys_data_policy2", {
-        model_table: tableName,
-        conditions: `sys_created_by=${this.client.username}^EQ`
-      });
-      tablePolicy = await getTablePolicy();
-    }
-    if (!tablePolicy || !tablePolicy.sys_id) {
-      throw `This should not happen`;
-    }
-    //delta sync policies
-    //fetch policies for this table, created by this user!
-    const existingRules = await this.client.do({
-      url: `/v2/table/sys_data_policy_rule`,
-      params: {
-        sysparm_exclude_reference_link: true,
-        sysparm_query: `table=${tableName}`
-      }
-    });
-    const newRules = columnNames.map(columnName => ({
-      table: tableName,
-      field: columnName,
-      disabled: readOnly,
-      mandatory
-    }));
-    //perform diff
-    return sync.diff({
-      prev: existingRules,
-      next: newRules,
-      index: "field",
-      create: async newRule => {
-        newRule.sys_data_policy = tablePolicy.sys_id;
-        await this.client.create("sys_data_policy_rule", newRule);
-      },
-      equal: async (existingRule, newRule) => {
-        for (let key in newRule) {
-          if (String(newRule[key]) != String(existingRule[key])) {
-            console.log(
-              "NOT",
-              key,
-              String(newRule[key]),
-              String(existingRule[key])
-            );
-            return false;
-          }
-        }
-        return true;
-      },
-      update: async (newRule, existingRule) => {
-        this.log(
-          `table "${tableName}": "${columnName}": update data policy rule`
-        );
-        await this.client.update("sys_data_policy_rule", {
-          sys_id: existingRule.sys_id,
-          ...newRule
-        });
-      },
-      delete: async existingRule => {
-        //dont delete policies not created by us
-        if (doDeletes && existingRule.sys_created_by === this.client.username) {
-          this.log(
-            `table "${tableName}": "${existingRule.field}": delete data policy`
-          );
-          await this.client.delete("sys_data_policy_rule", existingRule);
-        }
-      }
-    });
-  }
-
   /**
    * Commit a set of pending changes to a servicenow table.
    * @param {object} pending The pending operations.
@@ -741,6 +625,275 @@ module.exports = class ServiceNowClientTable {
     return true;
   }
 
+  async syncChoiceList(tableName, colName, choiceMap) {
+    if (!choiceMap) {
+      throw `Column (${colName}) missing choice map`;
+    }
+    let newChoices = [];
+    for (let value in choiceMap) {
+      newChoices.push({
+        name: tableName,
+        element: colName,
+        value,
+        label: choiceMap[value],
+        inactive: false
+      });
+    }
+    const loglist = newChoices.map(c => `${c.value}=${c.label}`).join(" ");
+    this.log(
+      `table ${tableName}: update column "${colName}": sync choices: ${loglist}`
+    );
+    let existingChoices = await this.client.do({
+      url: `/v2/table/sys_choice`,
+      params: {
+        sysparm_exclude_reference_link: true,
+        sysparm_query: `name=${tableName}^element=${colName}`
+      }
+    });
+    //perform diff
+    let results = await sync.diff({
+      prev: existingChoices,
+      next: newChoices,
+      index: "value",
+      create: async newChoice => {
+        this.log("create choice list:", newChoice);
+        await this.client.create("sys_choice", newChoice);
+      },
+      equal: snowEquals,
+      update: async (newChoice, existingChoice) => {
+        newChoice.sys_id = existingChoice.sys_id;
+        this.log("update choice list:", newChoice);
+        await this.client.update("sys_choice", newChoice);
+      },
+      delete: async existingChoice => {
+        this.log("delete choice list:", existingChoice);
+        await this.client.delete("sys_choice", existingChoice);
+      }
+    });
+    //sync again to fix incorrect domain on choice creations
+    if (results.create.length > 0) {
+      this.log(
+        `created #${results.create.length}, ` +
+          `double-sync choice list to fix domain`
+      );
+      return await this.syncChoiceList(tableName, colName, choiceMap);
+    }
+    //syncd!
+    return true;
+  }
+
+  async toggleDataPolicy(tableName, isActive) {
+    let tablePolicy = await this.getMyTablePolicy("data", tableName);
+    if (isActive === undefined) {
+      isActive = !tablePolicy.active; //default to toggle
+    }
+    if (typeof isActive !== "boolean") {
+      throw `expected isactive boolean`;
+    }
+    this.log(`${isActive ? "" : "un"}lock ${tableName} data policy...`);
+    if (tablePolicy.active !== isActive) {
+      let tableClass = tablePolicy.sys_class_name;
+      await this.client.update(tableClass, {
+        sys_id: tablePolicy.sys_id,
+        active: isActive
+      });
+    }
+    return true;
+  }
+
+  async getMyTablePolicy(type, tableName) {
+    //ui/data policy differences:
+    const isData = type === "data";
+    const isUi = type === "ui";
+    let policyTable = null;
+    let policyTableRef = null;
+    let policyDefaults = null;
+    if (isData) {
+      policyTable = "sys_data_policy2";
+      policyTableRef = "model_table";
+      policyDefaults = {
+        apply_import_set: true,
+        apply_soap: false,
+        enforce_ui: true
+      };
+    } else if (isUi) {
+      throw `Not supported. linking policy to rule is blocked by a system ACL.`;
+      policyTable = "sys_ui_policy";
+      policyTableRef = "table";
+      policyDefaults = {
+        global: true,
+        on_load: true,
+        run_scripts: false,
+        ui_type: 0
+      };
+    } else {
+      throw `Invalid type ${type}`;
+    }
+    //parent table sys id is required when creating new rules
+    const get = async () => {
+      let policies = await this.client.do({
+        url: `/v2/table/${policyTable}`,
+        params: {
+          sysparm_exclude_reference_link: true,
+          sysparm_query:
+            `${policyTableRef}=${tableName}^` +
+            `sys_created_by=${this.client.username}`
+        }
+      });
+      return one(policies);
+    };
+    this.log(`table ${tableName}: get ${type} policy`);
+    let tablePolicy = await get();
+    //table policy missing! create it
+    let targetPolicy = {
+      ...policyDefaults,
+      [policyTableRef]: tableName,
+      conditions: `sys_created_by=${this.client.username}^EQ`,
+      short_description: `DataMart auto-generated ${type} policy`,
+      inherit: false
+    };
+    //missing? create it
+    if (!tablePolicy) {
+      this.log(`table ${tableName}: create ${type} policy`);
+      await this.client.create(policyTable, targetPolicy);
+      tablePolicy = await get();
+    }
+    //fields dont match? update it
+    if (!snowEquals(tablePolicy, targetPolicy)) {
+      this.log(`table ${tableName}: DOESNT MATCH, SHOULD NOT HAPPEN`);
+      await this.client.update(policyTable, {
+        sys_id: tablePolicy.sys_id,
+        ...targetPolicy
+      });
+    }
+    //sanity check
+    if (!tablePolicy || !tablePolicy.sys_id) {
+      throw `This should not happen`;
+    }
+    return tablePolicy;
+  }
+
+  async syncDataPolicies(tableName, columns, opts) {
+    return await this.syncPolicies("data", tableName, columns, opts);
+  }
+
+  async syncUiPolicies(tableName, columns, opts) {
+    return await this.syncPolicies("ui", tableName, columns, opts);
+  }
+
+  async syncPolicies(type, tableName, columns, opts = {}) {
+    //ui/data policy differences:
+    const isData = type === "data";
+    const isUi = type === "ui";
+    let ruleTable = null;
+    let rulePolicyRef = null;
+    let ruleDefaults = null;
+    if (isData) {
+      ruleTable = "sys_data_policy_rule";
+      rulePolicyRef = "sys_data_policy";
+      ruleDefaults = {
+        mandatory: "ignore"
+      };
+    } else if (isUi) {
+      throw `Not supported. linking policy to rule is blocked by a system ACL.`;
+      ruleTable = "sys_ui_policy_action";
+      rulePolicyRef = "ui_policy";
+      ruleDefaults = {
+        mandatory: "ignore",
+        visible: "ignore"
+      };
+    } else {
+      throw `Invalid policy type ${type}`;
+    }
+    if (!tableName) {
+      throw `Missing table name`;
+    }
+    //TODO customise mandatory/visible
+    let { readOnly = true, doDeletes = false } = opts;
+    if (typeof columns === "string") {
+      columns = { [columns]: readOnly };
+    } else if (Array.isArray(columns)) {
+      const names = columns;
+      columns = {};
+      names.forEach(n => (columns[n] = readOnly));
+    } else if (!columns || typeof columns !== "object") {
+      throw `Columns should be a plain object (column => readonly bool)`;
+    }
+    for (let columnName in columns) {
+      if (typeof columns[columnName] !== "boolean") {
+        throw `Column (${columnName}) policy must be boolean (read-only flag)`;
+      }
+    }
+    let columnNames = Object.keys(columns);
+    if (columnNames.length === 0 && !doDeletes) {
+      return true; //done!
+    }
+    this.log(
+      `table ${tableName}: sync ${type} policy (#${columnNames.length} columns)`
+    );
+
+    let tablePolicy = await this.getMyTablePolicy(type, tableName);
+    //delta sync policies
+    //fetch policies for this table, created by this user!
+    const newRules = [];
+    for (const columnName in columns) {
+      const readOnly = columns[columnName];
+      newRules.push({
+        ...ruleDefaults,
+        [rulePolicyRef]: tablePolicy.sys_id,
+        table: tableName,
+        field: columnName,
+        disabled: String(readOnly)
+      });
+    }
+    //if were syncing one rule, query directly for it
+    const singleQuery =
+      newRules.length === 1 && !doDeletes ? `^field=${newRules[0].field}` : ``;
+    //get list of all existing rules for this table
+    const existingRules = await this.client.do({
+      url: `/v2/table/${ruleTable}`,
+      params: {
+        sysparm_exclude_reference_link: true,
+        sysparm_query:
+          `table=${tableName}^` +
+          `${rulePolicyRef}=${tablePolicy.sys_id}^` +
+          `sys_created_by=${this.client.username}` +
+          singleQuery
+      }
+    });
+    //perform diff
+    await sync.diff({
+      prev: existingRules,
+      next: newRules,
+      index: "field",
+      create: async newRule => {
+        this.log(
+          `table ${tableName}: "${newRule.field}": create ${type} policy rule`
+        );
+        await this.client.create(ruleTable, newRule);
+      },
+      equal: snowEquals,
+      update: async (newRule, existingRule) => {
+        this.log(
+          `table ${tableName}: "${newRule.field}": update ${type} policy rule`
+        );
+        await this.client.update(ruleTable, {
+          sys_id: existingRule.sys_id,
+          ...newRule
+        });
+      },
+      delete: async existingRule => {
+        if (doDeletes) {
+          this.log(
+            `table ${tableName}: "${existingRule.field}": delete ${type} policy`
+          );
+          await this.client.delete(ruleTable, existingRule);
+        }
+      }
+    });
+    return true;
+  }
+
   log(...args) {
     this.client.log(...args);
   }
@@ -748,4 +901,27 @@ module.exports = class ServiceNowClientTable {
   debug(...args) {
     this.client.debug(...args);
   }
+};
+
+//compares the string version of all 'next' keys to 'prev
+const snowEquals = (prev, next) => {
+  if (prev && typeof prev === "object" && next && typeof next === "object") {
+    let match = true;
+    for (const key in next) {
+      if (!(key in prev)) {
+        match = false;
+        // console.log("SNOW-EQ: MISSING:", key);
+        continue;
+      }
+      const p = String(prev[key]);
+      const n = String(next[key]);
+      if (p !== n) {
+        match = false;
+        // console.log("SNOW-EQ: MISMATCH:", key, p, n);
+        continue;
+      }
+    }
+    return match;
+  }
+  return prev === next;
 };

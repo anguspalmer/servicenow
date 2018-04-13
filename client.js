@@ -146,7 +146,11 @@ module.exports = class ServiceNowClient {
       //perform HTTP request, determine if we can rety
       let retry = false;
       try {
-        this.debug(`do: ${method} ${url}`, hasData ? request.data : "");
+        this.debug(
+          `do: ${method} ${url}`,
+          request.params || "",
+          hasData ? request.data : ""
+        );
         respErr = null;
         resp = await this.api(request);
       } catch (err) {
@@ -173,15 +177,20 @@ module.exports = class ServiceNowClient {
     }
     //has data
     let { data } = resp;
-    if (!data) {
-      throw `Expected response data`;
-    }
     //failed status?
     if (resp.status !== 200) {
+      this.log("error response:", resp.statusText, data);
       if (resp.status === 403) {
-        throw `Unauthorised (user ${this.username}), data: ${data}`;
+        throw `Unauthorised (user ${this.username}, ${method} ${url})`;
       }
-      throw `Unexpected error (${resp.status}), data: ${data}`;
+      throw `Unexpected error (${resp.statusText})`;
+    }
+    if (!data) {
+      // if (isRead) {
+      throw `Expected response data (${method} ${url})`;
+      // } else {
+      //   return true;
+      // }
     }
     //validate type
     let contentType = resp.headers["content-type"] || "";
