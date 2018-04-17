@@ -269,3 +269,25 @@ exports.titlize = slug =>
       return p;
     })
     .join(" ");
+
+exports.subsetOf = (small, big) => {
+  if (big && typeof big === "object" && small && typeof small === "object") {
+    let match = true;
+    for (const key in small) {
+      if (!(key in big)) {
+        match = false;
+        // console.log("SNOW-EQ: MISSING:", key);
+        continue;
+      }
+      const b = String(big[key]);
+      const s = String(small[key]);
+      if (b !== s) {
+        match = false;
+        // console.log("SNOW-EQ: MISMATCH:", key, p, n);
+        continue;
+      }
+    }
+    return match;
+  }
+  return big === small;
+};

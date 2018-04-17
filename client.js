@@ -12,6 +12,7 @@ const xml2js = require("xml2js");
 const parseXML = sync.promisify(xml2js.parseString);
 const ServiceNowClientTable = require("./client-table");
 const ServiceNowClientDelta = require("./client-delta");
+const ServiceNowClientRelationships = require("./client-relationships");
 const fakeApi = require("./fake-api");
 const { convertJS, prop, one, createRowHash, isGUID } = require("./util");
 const API_CONCURRENCY = 40;
@@ -63,6 +64,7 @@ module.exports = class ServiceNowClient {
     this.username = username;
     this.table = new ServiceNowClientTable(this);
     this.delta = new ServiceNowClientDelta(this);
+    this.relate = new ServiceNowClientRelationships(this);
     this.schemaCache = {};
   }
 
@@ -74,8 +76,9 @@ module.exports = class ServiceNowClient {
    * - Error message extraction
    * - Content type validation
    * - Auto XML parsing
+   * - Request data type conversion (JSON -> SN Strings)
    * - Response data type validation
-   * - TODO Response table schema validation
+   * - Response table schema validation
    * @param {object} request axios request object
    */
   async do(request) {
@@ -155,6 +158,7 @@ module.exports = class ServiceNowClient {
         resp = await this.api(request);
       } catch (err) {
         respErr = err.toString();
+        this.debug(`FAILED: do: ${method} ${url}`, respErr);
         //tcp disconnected, retry
         if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN") {
           retry = true;
@@ -417,21 +421,16 @@ module.exports = class ServiceNowClient {
       if (status) status.warn("found over 100k rows");
       return [];
     }
-    if (status) status.add(count);
     // Fetch from service now
-    const limit = 1000;
+    const limit = 500;
     const totalPages = Math.ceil(count / limit);
+    if (status) status.add(totalPages);
     let pages = [];
     for (let i = 0; i < totalPages; i++) {
       pages.push(i);
     }
+    let totalRecords = 0;
     let datas = await sync.map(4, pages, async page => {
-      if (totalPages > 1) {
-        this.log(
-          `GET #${count} records from "${tableName}" (page ${page +
-            1}/${totalPages})`
-        );
-      }
       let results = await this.do({
         method: "GET",
         url: `/v2/table/${tableName}`,
@@ -441,7 +440,14 @@ module.exports = class ServiceNowClient {
           sysparm_offset: page * limit
         }
       });
-      if (status) status.done(results.length);
+      if (status) status.done(1);
+      totalRecords += results.length;
+      if (totalPages > 1) {
+        this.log(
+          `got #${totalRecords} records from "${tableName}"` +
+            ` (page ${page + 1}/${totalPages})`
+        );
+      }
       return results;
     });
     // join all parts

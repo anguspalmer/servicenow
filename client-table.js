@@ -1,7 +1,7 @@
 const sync = require("sync");
 const isEqual = require("lodash.isequal");
 const { cache } = require("cache");
-const { one, isGUID, titlize } = require("./util");
+const { one, isGUID, titlize, subsetOf } = require("./util");
 const { snColumn } = require("./util-table");
 
 //split out table editing functionality
@@ -659,7 +659,7 @@ module.exports = class ServiceNowClientTable {
         this.log("create choice list:", newChoice);
         await this.client.create("sys_choice", newChoice);
       },
-      equal: snowEquals,
+      equal: (existingChoice, newChoice) => subsetOf(newChoice, existingChoice),
       update: async (newChoice, existingChoice) => {
         newChoice.sys_id = existingChoice.sys_id;
         this.log("update choice list:", newChoice);
@@ -749,7 +749,7 @@ module.exports = class ServiceNowClientTable {
       ...policyDefaults,
       [policyTableRef]: tableName,
       conditions: `sys_created_by=${this.client.username}^EQ`,
-      short_description: `DataMart auto-generated ${type} policy`,
+      short_description: `(AC3) DataMart auto-generated ${type} policy`,
       inherit: false
     };
     //missing? create it
@@ -759,8 +759,8 @@ module.exports = class ServiceNowClientTable {
       tablePolicy = await get();
     }
     //fields dont match? update it
-    if (!snowEquals(tablePolicy, targetPolicy)) {
-      this.log(`table ${tableName}: DOESNT MATCH, SHOULD NOT HAPPEN`);
+    if (!subsetOf(targetPolicy, tablePolicy)) {
+      this.log(`table ${tableName}: UPDATE TABLE`, policyTable);
       await this.client.update(policyTable, {
         sys_id: tablePolicy.sys_id,
         ...targetPolicy
@@ -872,7 +872,7 @@ module.exports = class ServiceNowClientTable {
         );
         await this.client.create(ruleTable, newRule);
       },
-      equal: snowEquals,
+      equal: (existingRule, newRule) => subsetOf(newRule, existingRule),
       update: async (newRule, existingRule) => {
         this.log(
           `table ${tableName}: "${newRule.field}": update ${type} policy rule`
@@ -901,27 +901,4 @@ module.exports = class ServiceNowClientTable {
   debug(...args) {
     this.client.debug(...args);
   }
-};
-
-//compares the string version of all 'next' keys to 'prev
-const snowEquals = (prev, next) => {
-  if (prev && typeof prev === "object" && next && typeof next === "object") {
-    let match = true;
-    for (const key in next) {
-      if (!(key in prev)) {
-        match = false;
-        // console.log("SNOW-EQ: MISSING:", key);
-        continue;
-      }
-      const p = String(prev[key]);
-      const n = String(next[key]);
-      if (p !== n) {
-        match = false;
-        // console.log("SNOW-EQ: MISMATCH:", key, p, n);
-        continue;
-      }
-    }
-    return match;
-  }
-  return prev === next;
 };
