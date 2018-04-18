@@ -231,6 +231,11 @@ module.exports = class ServiceNowClient {
     //table api results? use schema to convert to JS types
     if (tableAPI && tableName) {
       let schema = await this.getSchema(tableName);
+      //TODO: support fields=company.name
+      //requires schema.company.schema
+      //STAGE2: do we need company.name?
+      //do we just need sys_id?
+      //sys_id in DM?
       result = convertJS(schema, result);
     }
     //done!

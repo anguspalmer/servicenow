@@ -21,10 +21,11 @@ module.exports = class ServiceNowClientTable {
       throw `Incoming rows must be an array`;
     }
     //
-    let { primaryKey = "correlation_id", deletedFlag = "u_in_datamart" } = opts;
+    let { primaryKey, allowDeletes } = opts;
     if (!primaryKey) {
       throw `Primary key required`;
     }
+    const deletedFlag = allowDeletes ? null : "u_in_datamart";
     //load table schema
     let schema = await this.client.getSchema(tableName);
     //load all existing rows
@@ -220,7 +221,7 @@ module.exports = class ServiceNowClientTable {
     } catch (err) {
       throw err;
     } finally {
-      //de-activate data policy
+      //re-activate data policy
       await this.client.table.toggleDataPolicy(tableName, true);
     }
     //provide merge results

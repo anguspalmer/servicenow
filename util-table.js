@@ -5,6 +5,16 @@ exports.expandTable = table => {
   if (!table.name) {
     throw `Table must have a "name"`;
   }
+  if (!table.label) {
+    let name = table.name.replace(/(u_)?(cmdb_)?(ci_)?/, "");
+    table.label = titlize(name);
+  }
+  if (!table.primaryKey) {
+    table.primaryKey = "correlation_id";
+  }
+  if (table.allowDeletes !== true) {
+    table.allowDeletes = false;
+  }
   for (let id in table.columns) {
     let col = table.columns[id];
     if (!col.name) {
@@ -38,7 +48,8 @@ exports.expandColumn = col => {
   //check type AND set default length
   switch (col.type) {
     case "text":
-      default_length = 65535;
+      default_length = 4000;
+      col.type = "string";
       break;
     case "url":
     case "string":

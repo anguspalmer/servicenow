@@ -227,6 +227,7 @@ exports.isGUID = str => /^[a-f0-9]{32}$/.test(str);
 
 const titlizeMap = {
   ip: "IP",
+  mac: "MAC",
   api: "API",
   id: "ID",
   guid: "GUID",

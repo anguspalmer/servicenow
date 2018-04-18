@@ -742,7 +742,6 @@ module.exports = class ServiceNowClientTable {
       });
       return one(policies);
     };
-    this.log(`table ${tableName}: get ${type} policy`);
     let tablePolicy = await get();
     //table policy missing! create it
     let targetPolicy = {
@@ -760,7 +759,7 @@ module.exports = class ServiceNowClientTable {
     }
     //fields dont match? update it
     if (!subsetOf(targetPolicy, tablePolicy)) {
-      this.log(`table ${tableName}: UPDATE TABLE`, policyTable);
+      this.log(`table ${tableName}: update ${type} policy`);
       await this.client.update(policyTable, {
         sys_id: tablePolicy.sys_id,
         ...targetPolicy
