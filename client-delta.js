@@ -1,9 +1,8 @@
 const sync = require("sync");
-const { convertSN } = require("./util");
 const API_CONCURRENCY = 40;
 
 //split out table delta functionality
-module.exports = class ServiceNowClientTable {
+module.exports = class CDelta {
   constructor(client) {
     this.client = client;
   }
@@ -21,13 +20,16 @@ module.exports = class ServiceNowClientTable {
       throw `Incoming rows must be an array`;
     }
     //
-    let { primaryKey, allowDeletes } = opts;
+    let { primaryKey, deletedFlag, allowDeletes } = opts;
     if (!primaryKey) {
       throw `Primary key required`;
     }
-    const deletedFlag = allowDeletes ? null : "u_in_datamart";
-    //load table schema
-    let schema = await this.client.getSchema(tableName);
+    if (!deletedFlag) {
+      deletedFlag = "u_in_datamart";
+    }
+    if (allowDeletes !== true) {
+      allowDeletes = false;
+    }
     //load all existing rows
     let existingRows = await this.client.get(tableName);
     if (!Array.isArray(existingRows)) {
@@ -59,7 +61,7 @@ module.exports = class ServiceNowClientTable {
           duplicates[cid] = true;
           continue;
         }
-        let snRow = convertSN(schema, row);
+        let snRow = await this.client.schema.convertSN(tableName, row);
         index[type][cid] = snRow;
         rows[type].push(snRow);
       }
@@ -82,10 +84,12 @@ module.exports = class ServiceNowClientTable {
       update: [],
       delete: []
     };
+    //load table schema
+    let schema = await this.client.schema.get(tableName);
     //pending creates/updates
     for (let incomingRow of rows.incoming) {
       //incoming row exists => currently in datamart
-      if (deletedFlag) {
+      if (deletedFlag in schema) {
         incomingRow[deletedFlag] = "1"; //true
       }
       let cid = incomingRow[primaryKey];
@@ -109,7 +113,11 @@ module.exports = class ServiceNowClientTable {
       let payload = {};
       let changed = false;
       for (let k in incomingRow) {
-        let s = schema[k];
+        //check this column is actually in the schema
+        if (!(k in schema)) {
+          status.warn(`Found undefined column "${k}"`);
+          continue;
+        }
         let incomingVal = incomingRow[k];
         let existingVal = existingRow[k];
         //values are all strings.
@@ -149,11 +157,7 @@ module.exports = class ServiceNowClientTable {
         sys_id: existingRow.sys_id
       };
       //missing from incoming, delete it!
-      if (deletedFlag) {
-        //already "deleted"?
-        if (existingRow[deletedFlag] === "0") {
-          continue;
-        }
+      if (deletedFlag in schema) {
         payload[deletedFlag] = "0";
       }
       pending.delete.push(payload);
@@ -182,10 +186,11 @@ module.exports = class ServiceNowClientTable {
       );
     }
     //de-activate data policy
-    await this.client.table.toggleDataPolicy(tableName, false);
+    await this.client.policy.toggle(tableName, false);
     //try-catch to ensure we always re-active data policy
     try {
       //create all
+      this.log(`creating #${pending.create.length}`);
       await sync.each(API_CONCURRENCY, pending.create, async row => {
         //perform creation
         await this.client.create(tableName, row);
@@ -195,6 +200,7 @@ module.exports = class ServiceNowClientTable {
         }
       });
       //update all
+      this.log(`updating #${pending.update.length}`);
       await sync.each(API_CONCURRENCY, pending.update, async row => {
         //perform update
         await this.client.update(tableName, row);
@@ -204,14 +210,15 @@ module.exports = class ServiceNowClientTable {
         }
       });
       //delete all
+      this.log(`deleting #${pending.delete.length}`);
       await sync.each(API_CONCURRENCY, pending.delete, async row => {
         //perform deletion
-        if (deletedFlag && deletedFlag in row) {
-          //"delete" existing
-          await this.client.update(tableName, row);
-        } else {
+        if (allowDeletes) {
           //permanently delete existing
           await this.client.delete(tableName, row);
+        } else {
+          //"delete" existing (sets deleted flag)
+          await this.client.update(tableName, row);
         }
         //mark 1 action done
         if (status) {
@@ -222,7 +229,7 @@ module.exports = class ServiceNowClientTable {
       throw err;
     } finally {
       //re-activate data policy
-      await this.client.table.toggleDataPolicy(tableName, true);
+      await this.client.policy.toggle(tableName, true);
     }
     //provide merge results
     return {
@@ -237,154 +244,3 @@ module.exports = class ServiceNowClientTable {
     this.client.log("[delta]", ...args);
   }
 };
-
-/**
- * deltaImportAll objects in an array to the ServiceNow via the Import API
- * @param {string} tableName The target import table
- * @param {array} rows Synchonously send with backoff when throttled by ServiceNow.
- * @param {any} status The log-status instance for this task, see app/etl/log-status.js
- */
-// async deltaImportAll(tableName, rows, status) {
-//   if (!tableName) {
-//     throw "No table specified";
-//   } else if (!/^u_imp_dm_/.test(tableName)) {
-//     throw `Invalid table specified (${tableName})`;
-//   } else if (!Array.isArray(rows)) {
-//     throw `Rows must be an array`;
-//   } else if (rows.length === 0) {
-//     throw `Rows are empty`;
-//   }
-//   //get existing 0-50%, delta changes 50-100%
-//   status.setStages(2);
-//   // TODO check firstRow for use of non-"u_" columns?
-//   // let firstRow = rows[0];
-//   //fetch this tables schema
-//   let schema = await this.getSchema(tableName);
-//   //prepare hash helper making use of schema
-//   let hashRow = createRowHash(schema);
-//   //rows to add and remove
-//   let pending = { add: [], remove: [] };
-//   //index all incoming rows
-//   let incomingIndex = {};
-//   for (let row of rows) {
-//     let h = hashRow(row);
-//     if (h in incomingIndex) {
-//       status.warn(`Duplicate row:`, row);
-//     }
-//     incomingIndex[h] = row;
-//   }
-//   //load all existing imports
-//   let existingImports = await this.get(tableName, null, null, status);
-//   let matchedIndex = {};
-//   for (let row of existingImports) {
-//     let h = hashRow(row);
-//     let match = h in incomingIndex;
-//     if (match) {
-//       //existing row matched, don't delete, don't import
-//       matchedIndex[h] = true;
-//     } else {
-//       //existing row not matched needs to be deleted
-//       pending.remove.push(row);
-//     }
-//   }
-//   //incoming rows unmatched in the index need to be added
-//   for (let h in incomingIndex) {
-//     if (!matchedIndex[h]) {
-//       let row = incomingIndex[h];
-//       pending.add.push(row);
-//     }
-//   }
-//   //categorised, perform api calls!
-//   status.doneStage();
-//   status.add(pending.add.length + pending.remove.length);
-//   //stats (no update, create == import)
-//   let rowsCreated = 0;
-//   let rowsUpdated = 0;
-//   let rowsDeleted = 0;
-//   let rowsErrored = 0;
-//   let messages = [];
-//   //delete rows
-//   if (pending.remove.length > 0) {
-//     status.message(`Deleting #${pending.remove.length} unmatched rows...`);
-//     await sync.each(API_CONCURRENCY, pending.remove, async row => {
-//       await this.delete(tableName, row);
-//       rowsDeleted++;
-//       status.done(1);
-//     });
-//   }
-//   //add rows
-//   if (pending.add.length > 0) {
-//     status.message(`Importing #${pending.add.length} changed rows...`);
-//     //collect errors
-//     let errorMessages = {};
-//     //unmatched rows are ready for import!
-//     await sync.each(API_CONCURRENCY, pending.add, async row => {
-//       let data, error;
-//       try {
-//         data = await this.import(tableName, row);
-//         //import done
-//         rowsCreated++;
-//         //check transform result, can still fail...
-//         let { result } = data;
-//         let changed = false;
-//         for (let r of result) {
-//           let ignore =
-//             r.status_message &&
-//             r.status_message.startsWith("Row transform ignored");
-//           if (r.status === "error" && !ignore) {
-//             error = r.error_message;
-//           }
-//           if (r.status === "updated" || r.status === "inserted") {
-//             changed = true;
-//           }
-//         }
-//         //data was actually updated
-//         if (changed) {
-//           rowsUpdated++;
-//         }
-//       } catch (err) {
-//         error = err.toString();
-//       }
-//       //done!
-//       if (error) {
-//         if (error.length > 4096) {
-//           //prevent 20MB from being accidently inserting into the DB :(
-//           error = error.slice(0, 4096);
-//         }
-//         rowsErrored++;
-//         let n = errorMessages[error] || 1;
-//         errorMessages[error] = n + 1;
-//       }
-//       //mark 1 action done
-//       status.done(1);
-//     });
-//     for (let msg in errorMessages) {
-//       let n = errorMessages[msg];
-//       status.warn(`${msg} (occured ${n} times)`); //add as warnings
-//     }
-//   }
-//   if (rowsCreated > 0) {
-//     messages.push(`${rowsCreated} imported`);
-//   }
-//   if (rowsUpdated > 0) {
-//     messages.push(`${rowsUpdated} changes`);
-//   }
-//   if (rowsDeleted > 0) {
-//     messages.push(`${rowsDeleted} cleared`);
-//   }
-//   if (rowsErrored > 0) {
-//     messages.push(`${rowsErrored} errored`);
-//   }
-//   if (messages.length === 0) {
-//     messages.push(`No changes`);
-//   }
-//   //all done
-//   status.log(`[snc] delta-import: ${tableName}: ${messages.join(", ")}`);
-//   status.doneStage();
-//   return {
-//     rowsCreated,
-//     rowsUpdated,
-//     rowsDeleted,
-//     rowsErrored
-//   };
-// }

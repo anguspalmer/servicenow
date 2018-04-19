@@ -10,13 +10,17 @@ const md5 = m =>
 const Backoff = require("backo");
 const xml2js = require("xml2js");
 const parseXML = sync.promisify(xml2js.parseString);
-const ServiceNowClientTable = require("./client-table");
-const ServiceNowClientDelta = require("./client-delta");
-const ServiceNowClientRelationships = require("./client-relationships");
 const fakeApi = require("./fake-api");
-const { convertJS, prop, one, createRowHash, isGUID } = require("./util");
-const API_CONCURRENCY = 40;
-const EXPIRES_AT = Symbol();
+const { prop, one, isGUID } = require("./util");
+//client-class splits
+const CChoice = require("./client-choice");
+const CColumn = require("./client-column");
+const CDelta = require("./client-delta");
+const CLayout = require("./client-layout");
+const CPolicy = require("./client-policy");
+const CRelate = require("./client-relate");
+const CSchema = require("./client-schema");
+const CTable = require("./client-table");
 
 /**
  * @class
@@ -62,10 +66,14 @@ module.exports = class ServiceNowClient {
           validateStatus: () => true
         });
     this.username = username;
-    this.table = new ServiceNowClientTable(this);
-    this.delta = new ServiceNowClientDelta(this);
-    this.relate = new ServiceNowClientRelationships(this);
-    this.schemaCache = {};
+    this.choice = new CChoice(this);
+    this.column = new CColumn(this);
+    this.delta = new CDelta(this);
+    this.layout = new CLayout(this);
+    this.policy = new CPolicy(this);
+    this.relate = new CRelate(this);
+    this.schema = new CSchema(this);
+    this.table = new CTable(this);
   }
 
   /**
@@ -230,13 +238,7 @@ module.exports = class ServiceNowClient {
     }
     //table api results? use schema to convert to JS types
     if (tableAPI && tableName) {
-      let schema = await this.getSchema(tableName);
-      //TODO: support fields=company.name
-      //requires schema.company.schema
-      //STAGE2: do we need company.name?
-      //do we just need sys_id?
-      //sys_id in DM?
-      result = convertJS(schema, result);
+      result = await this.schema.convertJS(tableName, result);
     }
     //done!
     return result;
@@ -279,81 +281,6 @@ module.exports = class ServiceNowClient {
   }
 
   /**
-   * Returns the schema of the given table.
-   * @param {string} tableName
-   */
-  async getSchema(tableName, invalidate = false) {
-    //force remove cache
-    if (invalidate) {
-      delete this.schemaCache[tableName];
-    }
-    //attempt to load from cache
-    if (tableName in this.schemaCache) {
-      let schema = this.schemaCache[tableName];
-      //inflight? wait and re-load from cache
-      if (schema instanceof Promise) {
-        await schema;
-        schema = this.schemaCache[tableName];
-      }
-      if (+new Date() < schema[EXPIRES_AT]) {
-        return schema;
-      }
-      delete this.schemaCache[tableName];
-    }
-    //mark get-schema as inflight, others following must wait!
-    let done;
-    this.schemaCache[tableName] = new Promise(d => (done = d));
-    //load from servicenow
-    let resp = await this.do({
-      method: "GET",
-      baseURL: `https://${this.instance}.service-now.com/`,
-      url: `${tableName}.do?SCHEMA`
-    });
-    let elements = prop(resp, tableName, "element");
-    if (!Array.isArray(elements)) {
-      throw `GET schema failed: expected array of columns`;
-    }
-    let schema = {};
-    elements.sort((a, b) => {
-      return a.$.name < b.$.name ? -1 : 1;
-    });
-    elements.forEach(elem => {
-      let attrs = elem.$;
-      //require name and type
-      let col = {};
-      if (!attrs.name) {
-        throw `Missing column name`;
-      }
-      col.name = attrs.name;
-      delete attrs.name;
-      if (!attrs.internal_type) {
-        throw `Missing column type`;
-      }
-      col.type = attrs.internal_type;
-      delete attrs.internal_type;
-      //copy over rest
-      for (let k in attrs) {
-        let v = attrs[k];
-        if (v === "true") {
-          v = true;
-        } else if (v === "false") {
-          v = false;
-        } else if (/^\d+$/.test(v)) {
-          v = parseInt(v, 10);
-        }
-        col[k] = v;
-      }
-      schema[col.name] = col;
-    });
-    //add to cache with 5 minute expiry
-    schema[EXPIRES_AT] = +new Date() + 5 * 60 * 1000;
-    this.schemaCache[tableName] = schema;
-    done();
-    //return!
-    return schema;
-  }
-
-  /**
    * Returns an array of json objects using the ServiceNow Table API
    * Use [columns] array to limit fields returned and rename fields.
    * Since ServiceNow adds a 'u_' to custom columns and this makes
@@ -382,11 +309,10 @@ module.exports = class ServiceNowClient {
    * @param {array} query Optional query string to filter records exactly as it appears in a ServiceNow list view
    */
   async getRecords(tableName, opts = {}) {
-    let { columns, query, status } = opts;
+    let { columns, query, fields = [], status } = opts;
     let params = {
       ...this.defaultParams
     };
-    let fields = [];
     let renameFields = {};
     // limit results to specified columns
     if (columns) {
@@ -401,6 +327,8 @@ module.exports = class ServiceNowClient {
           fields.push(c);
         }
       }
+    }
+    if (fields.length > 0) {
       params.sysparm_fields = fields.join(",");
     }
     if (query) {

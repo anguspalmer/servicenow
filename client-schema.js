@@ -1,0 +1,281 @@
+const sync = require("sync");
+const { prop } = require("./util");
+const EXPIRES_AT = Symbol();
+
+module.exports = class CSchema {
+  constructor(client) {
+    this.client = client;
+    this.cache = {};
+  }
+
+  /**
+   * Returns the schema of the given table.
+   * @param {string} tableName
+   */
+  async get(tableName, invalidate = false) {
+    //force remove cache
+    if (invalidate) {
+      delete this.cache[tableName];
+    }
+    //attempt to load from cache
+    if (tableName in this.cache) {
+      let schema = this.cache[tableName];
+      //inflight? wait and re-load from cache
+      if (schema instanceof Promise) {
+        await schema;
+        schema = this.cache[tableName];
+      }
+      if (+new Date() < schema[EXPIRES_AT]) {
+        return schema;
+      }
+      delete this.cache[tableName];
+    }
+    //mark get-schema as inflight, others following must wait!
+    let done;
+    this.cache[tableName] = new Promise(d => (done = d));
+    //load from servicenow
+    let resp = await this.client.do({
+      method: "GET",
+      baseURL: `https://${this.client.instance}.service-now.com/`,
+      url: `${tableName}.do?SCHEMA`
+    });
+    let elements = prop(resp, tableName, "element");
+    if (!Array.isArray(elements)) {
+      throw `GET schema failed: expected array of columns`;
+    }
+    let schema = {};
+    elements.sort((a, b) => {
+      return a.$.name < b.$.name ? -1 : 1;
+    });
+    elements.forEach(elem => {
+      let attrs = elem.$;
+      //require name and type
+      let col = {};
+      if (!attrs.name) {
+        throw `Missing column name`;
+      }
+      col.name = attrs.name;
+      delete attrs.name;
+      if (!attrs.internal_type) {
+        throw `Missing column type`;
+      }
+      col.type = attrs.internal_type;
+      delete attrs.internal_type;
+      //copy over rest
+      for (let k in attrs) {
+        let v = attrs[k];
+        if (v === "true") {
+          v = true;
+        } else if (v === "false") {
+          v = false;
+        } else if (/^\d+$/.test(v)) {
+          v = parseInt(v, 10);
+        }
+        col[k] = v;
+      }
+      schema[col.name] = col;
+    });
+    //add to cache with 5 minute expiry
+    schema[EXPIRES_AT] = +new Date() + 5 * 60 * 1000;
+    this.cache[tableName] = schema;
+    done();
+    //return!
+    return schema;
+  }
+
+  async convertJS(tableName, row) {
+    const schema = await this.get(tableName);
+    if (!schema) {
+      throw `Missing schema for ${tableName}`;
+    }
+    //run against all elements
+    if (Array.isArray(row)) {
+      const rows = row;
+      return await sync.map(
+        1,
+        rows,
+        async r => await this.convertJS(tableName, r)
+      );
+    }
+    //must be an object
+    if (!row || typeof row !== "object") {
+      throw `Invalid row`;
+    }
+    let obj = {};
+    for (let key in row) {
+      let k = key;
+      let kschema = schema;
+      let o = obj;
+      //dot keys required nested schema lookups
+      if (key.includes(".")) {
+        const parents = key.split(".");
+        //outer name the target key
+        k = parents.pop();
+        //lookup parent schemas
+        while (parents.length > 0) {
+          const k = parents.shift();
+          const s = kschema[k];
+          //s must be a reference field
+          if (!s || s.type !== "reference") {
+            throw `Invalid reference "${key}" (parent "${k}")`;
+          }
+          if (!o[k]) {
+            o[k] = {};
+          }
+          kschema = await this.get(s.reference_table);
+          o = o[k];
+        }
+      }
+      //pull schema field
+      let s = kschema[k];
+      if (!s) {
+        console.log(`JS OBJ HAS NO MATCHING SCHEMA FOR`, key);
+        continue;
+      }
+      let v = row[key];
+      //must have value
+      if (v == undefined || v === "") {
+        continue;
+      }
+      //change string => schema type
+      let t = s.type;
+      if (t === "boolean") {
+        if (v === "true") {
+          v = true;
+        } else if (v === "false") {
+          v = false;
+        } else {
+          throw `Invalid boolean "${v}"`;
+        }
+      } else if (t === "integer") {
+        let i = parseInt(v, 10);
+        if (isNaN(i)) {
+          throw `Invalid integer "${v}"`;
+        }
+        v = i;
+      } else if (t === "float" || t === "decimal") {
+        let i = parseFloat(v, 10);
+        if (isNaN(i)) {
+          throw `Invalid float/decimal "${v}"`;
+        }
+        v = i;
+        3;
+      } else if (t === "glide_date_time") {
+        if (!/^(\d\d\d\d-\d\d-\d\d) (\d\d:\d\d:\d\d)$/.test(v)) {
+          throw `Unexpected date format "${v}"`;
+        }
+        //display=false implies UTC dates?
+        let d = new Date(`${RegExp.$1}T${RegExp.$2}Z`);
+        if (isNaN(d)) {
+          throw `Invalid date "${v}"`;
+        }
+        v = d;
+      } else if (t === "string") {
+        //noop
+      } else if (t === "reference") {
+        //"leaf" reference, just keep link-object or sys_id string
+      } else {
+        // NOTE: objects (link+value) are left untouched
+        // console.log("CONVERT", v, "TO", t);
+      }
+      o[k] = v;
+    }
+    return obj;
+  }
+
+  async convertSN(tableName, obj) {
+    const schema = await this.get(tableName);
+    if (!schema) {
+      throw `Missing schema for ${tableName}`;
+    }
+    //run against all elements
+    if (Array.isArray(obj)) {
+      const objs = obj;
+      return await sync.map(
+        1,
+        objs,
+        async o => await this.convertSN(tableName, o)
+      );
+    }
+    //must be an object
+    if (!obj || typeof obj !== "object") {
+      throw `Invalid object`;
+    }
+    //values must be strings.
+    //values must be either defined or not.
+    //if undefined, empty string, otherwise defined
+    let row = {};
+    for (let k in schema) {
+      let s = schema[k];
+      //skip missing fields
+      if (!(k in obj)) {
+        continue;
+      }
+      let v = obj[k];
+      //change schema type => string
+      let t = s.type;
+      //check boolean first, ensures always defined (0 or 1)
+      if (t === "boolean") {
+        if (typeof v === "string") {
+          v = v === "true";
+        } else if (typeof v === "number") {
+          v = v === 1;
+        } else if (v === null) {
+          v = false;
+        }
+        if (typeof v !== "boolean") {
+          throw `"${k}" expected boolean "${v}"`;
+        }
+        //servicenow api returns booleans as 1 or 0
+        v = `${v ? 1 : 0}`;
+      } else if (v === null || v === undefined) {
+        //undefined values are the empty string.
+        v = "";
+      } else if (t === "decimal" || t === "float") {
+        if (typeof v === "string") {
+          v = parseFloat(v);
+        }
+        if (typeof v !== "number" || isNaN(v)) {
+          throw `"${k}" expected number "${v}"`;
+        }
+        // let places = 2
+        //TODO calc number of places, scope
+        v = `${Math.round(v * 100) / 100}`; //2 places
+      } else if (t === "integer" || t === "long") {
+        if (typeof v === "string") {
+          v = parseInt(v, 10);
+        }
+        if (typeof v !== "number" || isNaN(v)) {
+          throw `"${k}" expected number "${v}"`;
+        }
+        v = `${Math.round(v)}`;
+      } else if (t == "string") {
+        //convert number to string
+        if (typeof v === "number") {
+          v = String(v);
+        }
+        //trim length
+        if (s.max_length && v.length > s.max_length) {
+          console.log(`<WARN> Truncated column ${k} with length  ${v.length}`);
+          v = v.slice(0, s.max_length);
+        }
+      } else if (t === "glide_date_time") {
+        if (!(v instanceof Date)) {
+          throw `"${k}" expected date "${v}"`;
+        }
+        v.setMilliseconds(0); //SN cannot store millis
+        v = v
+          .toISOString()
+          .replace("T", " ")
+          .replace(".000Z", "");
+      }
+      //sanity check
+      if (typeof v !== "string") {
+        throw `"${k}" expected string (found type '${t}/${typeof v}' with value '${v}')`;
+      }
+      //ready!
+      row[k] = v;
+    }
+    return row;
+  }
+};

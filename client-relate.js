@@ -1,9 +1,9 @@
 const sync = require("../sync");
-const { subsetOf, one } = require("./util");
+const { one } = require("./util");
 
 //ci relationships.
 
-module.exports = class ServiceNowClientRelationships {
+module.exports = class CRelate {
   constructor(client) {
     this.client = client;
   }
@@ -172,10 +172,6 @@ module.exports = class ServiceNowClientRelationships {
   }
 
   log(...args) {
-    this.client.log(...args);
-  }
-
-  debug(...args) {
-    this.client.debug(...args);
+    this.client.log("[relate]", ...args);
   }
 };
