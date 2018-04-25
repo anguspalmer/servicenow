@@ -210,6 +210,8 @@ module.exports = class CTable {
     for (const rule of ruleList) {
       if (rule.disabled === "true") {
         columnDataPolicies[rule.field] = "readonly";
+      } else if (rule.disabled === "false") {
+        columnDataPolicies[rule.field] = "writable";
       }
     }
     //validate table schema

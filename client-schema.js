@@ -109,9 +109,9 @@ module.exports = class CSchema {
       //dot keys required nested schema lookups
       if (key.includes(".")) {
         const parents = key.split(".");
-        //outer name the target key
+        //the outer name is the target key,
         k = parents.pop();
-        //lookup parent schemas
+        //the remaining keys are parent schemas:
         while (parents.length > 0) {
           const k = parents.shift();
           const s = kschema[k];
@@ -129,7 +129,7 @@ module.exports = class CSchema {
       //pull schema field
       let s = kschema[k];
       if (!s) {
-        console.log(`JS OBJ HAS NO MATCHING SCHEMA FOR`, key);
+        this.warn(`schema missing key "${k}"`);
         continue;
       }
       let v = row[key];
@@ -277,5 +277,13 @@ module.exports = class CSchema {
       row[k] = v;
     }
     return row;
+  }
+
+  log(...args) {
+    this.client.log("[table]", ...args);
+  }
+
+  warn(...args) {
+    this.log("WARNING", ...args);
   }
 };

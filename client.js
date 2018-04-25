@@ -310,21 +310,25 @@ module.exports = class ServiceNowClient {
    */
   async getRecords(tableName, opts = {}) {
     let { columns, query, fields = [], status } = opts;
+    //prepare params for all requests
     let params = {
       ...this.defaultParams
     };
-    let renameFields = {};
     // limit results to specified columns
+    let renameFields = {};
     if (columns) {
       for (let c of columns) {
-        if (typeof c == "object") {
-          // handle the column renaming
-          let name = Object.keys(c)[0];
-          let newName = c[name];
-          fields.push(name);
-          renameFields[name] = newName;
-        } else {
+        if (typeof c === "string") {
           fields.push(c);
+        } else if (c && typeof c == "object") {
+          for (let name in c) {
+            let newName = c[name];
+            renameFields[name] = newName;
+            fields.push(name);
+            break;
+          }
+        } else {
+          throw `Invalid column`;
         }
       }
     }
@@ -363,8 +367,8 @@ module.exports = class ServiceNowClient {
       pages.push(i);
     }
     let totalRecords = 0;
-    let datas = await sync.map(4, pages, async page => {
-      let results = await this.do({
+    const datas = await sync.map(4, pages, async page => {
+      const results = await this.do({
         method: "GET",
         url: `/v2/table/${tableName}`,
         params: {
@@ -381,22 +385,19 @@ module.exports = class ServiceNowClient {
             ` (page ${page + 1}/${totalPages})`
         );
       }
-      return results;
-    });
-    // join all parts
-    data = [].concat(...datas);
-    // Rename the fields
-    if (Object.keys(renameFields).length) {
-      data = data.map(row => {
-        for (let f in row) {
-          if (renameFields[f]) {
+      // Rename the fields
+      for (const row of results) {
+        for (let f in renameFields) {
+          if (f in row) {
             row[renameFields[f]] = row[f];
             delete row[f];
           }
         }
-        return row;
-      });
-    }
+      }
+      return results;
+    });
+    // join all parts
+    data = [].concat(...datas);
     // Cache for future
     if (this.enableCache && data && data.length > 0) {
       await cache.put(cacheKey, data);
@@ -475,7 +476,7 @@ module.exports = class ServiceNowClient {
 
   debug(...args) {
     if (this.enableDebug) {
-      this.log(...args);
+      this.log("<DEBUG>", ...args);
     }
   }
 };

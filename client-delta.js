@@ -13,14 +13,15 @@ module.exports = class CDelta {
    * @param {array} incomingRows
    * @param {any} status The log-status instance for this task, see app/etl/log-status.js
    */
-  async merge(tableName, incomingRows, status = console, opts = {}) {
+  async merge(run = {}) {
+    const { tableName, rows, status = console } = run;
     if (!tableName) {
       throw "No table specified";
-    } else if (!Array.isArray(incomingRows)) {
+    } else if (!Array.isArray(rows)) {
       throw `Incoming rows must be an array`;
     }
     //
-    let { primaryKey, deletedFlag, allowDeletes } = opts;
+    let { primaryKey, deletedFlag, allowDeletes } = run;
     if (!primaryKey) {
       throw `Primary key required`;
     }
@@ -31,51 +32,54 @@ module.exports = class CDelta {
       allowDeletes = false;
     }
     //load all existing rows
-    let existingRows = await this.client.get(tableName);
+    const existingRows = await this.client.getRecords(tableName, { status });
     if (!Array.isArray(existingRows)) {
       throw `Existing rows must be an array`;
     }
-    let allRows = {
+    const incomingRows = rows;
+    const rawRows = {
       incoming: incomingRows,
       existing: existingRows
     };
-    let rows = {
+    //process and index all existing and incoming rows
+    const processedRows = {
       incoming: [],
       existing: []
     };
-    let index = {
+    const index = {
       incoming: {},
       existing: {}
     };
     //validate and index all rows
-    for (let type in allRows) {
+    for (const type in rawRows) {
       let missing = 0;
-      let duplicates = {};
-      for (let row of allRows[type]) {
+      const duplicates = new Set();
+      for (let row of rawRows[type]) {
         let cid = row[primaryKey];
         if (!cid) {
           missing++;
           continue;
         }
         if (cid in index[type]) {
-          duplicates[cid] = true;
+          duplicates.add(cid);
           continue;
         }
         let snRow = await this.client.schema.convertSN(tableName, row);
         index[type][cid] = snRow;
-        rows[type].push(snRow);
+        processedRows[type].push(snRow);
       }
       if (missing > 0) {
         status.warn(`Found #${missing} ${type} rows with no "${primaryKey}"`);
       }
-      let numDuplicates = Object.keys(duplicates).length;
-      if (numDuplicates > 0) {
-        status.warn(`Found #${numDuplicates} ${type} duplicate rows`);
+      if (duplicates.size > 0) {
+        status.warn(`Found #${duplicates.size} ${type} duplicate rows`);
       }
     }
     status.log(
-      `delta merging #${rows.incoming.length} entries into ${tableName}, ` +
-        `found #${rows.existing.length} existing entries`
+      `delta merging #${
+        processedRows.incoming.length
+      } entries into ${tableName}, ` +
+        `found #${processedRows.existing.length} existing entries`
     );
     let rowsMatched = 0;
     //split into three groups
@@ -87,7 +91,7 @@ module.exports = class CDelta {
     //load table schema
     let schema = await this.client.schema.get(tableName);
     //pending creates/updates
-    for (let incomingRow of rows.incoming) {
+    for (let incomingRow of processedRows.incoming) {
       //incoming row exists => currently in datamart
       if (deletedFlag in schema) {
         incomingRow[deletedFlag] = "1"; //true
@@ -133,8 +137,8 @@ module.exports = class CDelta {
         if (JSON.stringify(incomingVal) !== JSON.stringify(existingVal)) {
           changed = true;
           payload[k] = incomingVal;
-          this.log(
-            `DEBUG: ${tableName}: ${cid}: ${k}: '${existingVal}' => '${incomingVal}'`
+          this.debug(
+            `${tableName}: ${cid}: ${k}: '${existingVal}' => '${incomingVal}'`
           );
         }
       }
@@ -148,7 +152,7 @@ module.exports = class CDelta {
       }
     }
     //pending deletes
-    for (let existingRow of rows.existing) {
+    for (let existingRow of processedRows.existing) {
       let cid = existingRow[primaryKey];
       if (cid in index.incoming) {
         continue;
@@ -158,6 +162,9 @@ module.exports = class CDelta {
       };
       //missing from incoming, delete it!
       if (deletedFlag in schema) {
+        if (existingRow[deletedFlag] === "0") {
+          continue; //already deleted
+        }
         payload[deletedFlag] = "0";
       }
       pending.delete.push(payload);
@@ -180,11 +187,9 @@ module.exports = class CDelta {
       };
     }
     status.log(msg.join(", "));
-    if (status) {
-      status.add(
-        pending.create.length + pending.update.length + pending.delete.length
-      );
-    }
+    status.add(
+      pending.create.length + pending.update.length + pending.delete.length
+    );
     //de-activate data policy
     await this.client.policy.toggle(tableName, false);
     //try-catch to ensure we always re-active data policy
@@ -195,9 +200,7 @@ module.exports = class CDelta {
         //perform creation
         await this.client.create(tableName, row);
         //mark 1 action done
-        if (status) {
-          status.done();
-        }
+        status.done();
       });
       //update all
       this.log(`updating #${pending.update.length}`);
@@ -205,9 +208,7 @@ module.exports = class CDelta {
         //perform update
         await this.client.update(tableName, row);
         //mark 1 action done
-        if (status) {
-          status.done();
-        }
+        status.done();
       });
       //delete all
       this.log(`deleting #${pending.delete.length}`);
@@ -221,9 +222,7 @@ module.exports = class CDelta {
           await this.client.update(tableName, row);
         }
         //mark 1 action done
-        if (status) {
-          status.done();
-        }
+        status.done();
       });
     } catch (err) {
       throw err;
@@ -242,5 +241,9 @@ module.exports = class CDelta {
 
   log(...args) {
     this.client.log("[delta]", ...args);
+  }
+
+  debug(...args) {
+    this.client.debug("[delta]", ...args);
   }
 };
