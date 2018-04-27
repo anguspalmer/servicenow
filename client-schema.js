@@ -260,8 +260,16 @@ module.exports = class CSchema {
           v = v.slice(0, s.max_length);
         }
       } else if (t === "glide_date_time") {
+        if (
+          typeof v === "string" &&
+          /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(\.\d{3}) [\+\-]\d{2}:\d{2})$/.test(
+            v
+          )
+        ) {
+          v = new Date(v);
+        }
         if (!(v instanceof Date)) {
-          throw `"${k}" expected date "${v}"`;
+          throw `"${k}" expected date (got ${typeof v} ${v})`;
         }
         v.setMilliseconds(0); //SN cannot store millis
         v = v

@@ -55,7 +55,8 @@ module.exports = class CDelta {
       let missing = 0;
       const duplicates = new Set();
       for (let row of rawRows[type]) {
-        let cid = row[primaryKey];
+        let snRow = await this.client.schema.convertSN(tableName, row);
+        let cid = snRow[primaryKey];
         if (!cid) {
           missing++;
           continue;
@@ -64,7 +65,6 @@ module.exports = class CDelta {
           duplicates.add(cid);
           continue;
         }
-        let snRow = await this.client.schema.convertSN(tableName, row);
         index[type][cid] = snRow;
         processedRows[type].push(snRow);
       }
@@ -76,9 +76,8 @@ module.exports = class CDelta {
       }
     }
     status.log(
-      `delta merging #${
-        processedRows.incoming.length
-      } entries into ${tableName}, ` +
+      `delta merging #${processedRows.incoming.length} ` +
+        `entries into ${tableName}, ` +
         `found #${processedRows.existing.length} existing entries`
     );
     let rowsMatched = 0;
