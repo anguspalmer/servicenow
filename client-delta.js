@@ -14,7 +14,7 @@ module.exports = class CDelta {
    * @param {any} status The log-status instance for this task, see app/etl/log-status.js
    */
   async merge(run = {}) {
-    const { tableName, rows, status = console } = run;
+    const { tableName, rows, status } = run;
     if (!tableName) {
       throw "No table specified";
     } else if (!Array.isArray(rows)) {
@@ -31,8 +31,15 @@ module.exports = class CDelta {
     if (allowDeletes !== true) {
       allowDeletes = false;
     }
+    if (!status) {
+      //NOTE: @jpillora: allow this case?
+      throw `Merge without "status" not supported`;
+    }
     //load all existing rows
-    const existingRows = await this.client.getRecords(tableName, { status });
+    const existingRows = await this.client.getRecords(tableName, {
+      // query: `sys_created_by: ${this.client.username}`,
+      status
+    });
     if (!Array.isArray(existingRows)) {
       throw `Existing rows must be an array`;
     }
@@ -136,7 +143,7 @@ module.exports = class CDelta {
         if (JSON.stringify(incomingVal) !== JSON.stringify(existingVal)) {
           changed = true;
           payload[k] = incomingVal;
-          this.debug(
+          status.debug(
             `${tableName}: ${cid}: ${k}: '${existingVal}' => '${incomingVal}'`
           );
         }
@@ -161,8 +168,8 @@ module.exports = class CDelta {
       };
       //missing from incoming, delete it!
       if (deletedFlag in schema) {
-        if (existingRow[deletedFlag] === "0") {
-          continue; //already deleted
+        if (!allowDeletes && existingRow[deletedFlag] === "0") {
+          continue; //already "deleted"
         }
         payload[deletedFlag] = "0";
       }
@@ -194,7 +201,7 @@ module.exports = class CDelta {
     //try-catch to ensure we always re-active data policy
     try {
       //create all
-      this.log(`creating #${pending.create.length}`);
+      status.log(`creating #${pending.create.length}`);
       await sync.each(API_CONCURRENCY, pending.create, async row => {
         //perform creation
         await this.client.create(tableName, row);
@@ -202,7 +209,7 @@ module.exports = class CDelta {
         status.done();
       });
       //update all
-      this.log(`updating #${pending.update.length}`);
+      status.log(`updating #${pending.update.length}`);
       await sync.each(API_CONCURRENCY, pending.update, async row => {
         //perform update
         await this.client.update(tableName, row);
@@ -210,7 +217,7 @@ module.exports = class CDelta {
         status.done();
       });
       //delete all
-      this.log(`deleting #${pending.delete.length}`);
+      status.log(`deleting #${pending.delete.length}`);
       await sync.each(API_CONCURRENCY, pending.delete, async row => {
         //perform deletion
         if (allowDeletes) {

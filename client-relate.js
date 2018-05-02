@@ -61,6 +61,10 @@ module.exports = class CRelate {
     if (!Array.isArray(rows)) {
       throw `Rows must be an array`;
     }
+    if (!status) {
+      //NOTE: @jpillora: allow this case?
+      throw `Merge without "status" not supported`;
+    }
     //convert spec.columns into relationship types
     const types = {};
     const typeIds = new Set();
@@ -86,7 +90,7 @@ module.exports = class CRelate {
       const get = async () => one(await this.client.do(request));
       let record = await get();
       if (!record) {
-        this.log(`creating relationship: "${relationship}"`);
+        status.log(`creating relationship: "${relationship}"`);
         await this.client.create("cmdb_rel_type", fields);
         record = await get();
       }
@@ -100,7 +104,7 @@ module.exports = class CRelate {
     if (typeNames.length === 0) {
       return true; //related all rows successfully!
     }
-    // this.log(`loaded types`, typeNames);
+    // status.log(`loaded types`, typeNames);
     //compute all relationships for all types
     for (const columnName in types) {
       const type = types[columnName];
@@ -146,11 +150,11 @@ module.exports = class CRelate {
         next: newRels,
         index: rel => `${rel.parent}|${rel.child}`,
         create: async newRel => {
-          this.log(`relate: ${newRel.parent} -> ${newRel.child}`);
+          status.log(`relate: ${newRel.parent} -> ${newRel.child}`);
           await this.client.create("cmdb_rel_ci", newRel);
         },
         delete: async existingRel => {
-          this.log(`unrelate: ${existingRel.parent} -> ${existingRel.child}`);
+          status.log(`unrelate: ${existingRel.parent} -> ${existingRel.child}`);
           await this.client.delete("cmdb_rel_ci", existingRel);
         }
       });
