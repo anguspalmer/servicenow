@@ -60,6 +60,23 @@ module.exports = class CTable {
         if (!id) {
           throw `Column has no name`;
         }
+        //find in-use label
+        let rawDoc = raw.doc || {};
+        let label = rawDoc.label || raw.column_label;
+        //trim doc
+        delete rawDoc.label;
+        if (
+          rawDoc.plural &&
+          (rawDoc.plural === label || rawDoc.plural === `${label}s`)
+        ) {
+          delete rawDoc.plural;
+        }
+        if (rawDoc.language === "en") {
+          delete rawDoc.language;
+        }
+        if (Object.keys(rawDoc).length === 0) {
+          rawDoc = null;
+        }
         //already defined?
         if (id in table.columns) {
           let col = table.columns[id];
@@ -71,16 +88,24 @@ module.exports = class CTable {
           if (!col.choice_map && raw.choice_map) {
             col.choice_map = raw.choice_map;
           }
+          if (rawDoc) {
+            col.doc = rawDoc;
+          }
+          //use last label
+          col.label = label;
           //use LAST parent (source parent)
           col.table = rawTable.name;
           continue;
         }
         let col = {};
         col.name = id;
-        col.label = raw.column_label;
+        col.label = label;
         col.table = rawTable.name;
         col.data_policy = raw.data_policy;
         col.choice_map = raw.choice_map;
+        if (rawDoc) {
+          col.doc = rawDoc;
+        }
         for (let k in raw) {
           let v = raw[k];
           //exclude some
@@ -168,7 +193,7 @@ module.exports = class CTable {
       return null;
     }
     //wait on a few promises and map the results
-    let [columnList, choiceList, ruleList] = await sync.wait([
+    let [columnList, choiceList, ruleList, docList] = await sync.wait([
       this.client.do({
         url: `/v2/table/sys_dictionary`,
         params: {
@@ -192,6 +217,13 @@ module.exports = class CTable {
             `table=${table.name}^` + `sys_created_by=${this.client.username}`,
           sysparm_fields: "field,disabled"
         }
+      }),
+      this.client.do({
+        url: `/v2/table/sys_documentation`,
+        params: {
+          sysparm_query: `name=${table.name}`,
+          sysparm_fields: `element,label,plural,help,hint,language,url`
+        }
       })
     ]);
     //extract and group choice fields
@@ -214,6 +246,21 @@ module.exports = class CTable {
         columnDataPolicies[rule.field] = "writable";
       }
     }
+    //extract column docs
+    const columnDocs = {};
+    for (const doc of docList) {
+      //cleanup
+      const id = doc.element;
+      delete doc.element;
+      //store
+      if (id) {
+        columnDocs[id] = doc;
+      } else if (!table.doc) {
+        table.doc = doc;
+      } else {
+        this.log(`unexpected doc on table ${table.name}:`, doc);
+      }
+    }
     //validate table schema
     let columns = {};
     for (let column of columnList) {
@@ -233,6 +280,10 @@ module.exports = class CTable {
       //add data policy settings where possible
       if (id in columnDataPolicies) {
         column.data_policy = columnDataPolicies[id];
+      }
+      //add doc where applicable
+      if (id in columnDocs) {
+        column.doc = columnDocs[id];
       }
       //validate column schema
       columns[id] = column;
