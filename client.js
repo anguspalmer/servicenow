@@ -66,6 +66,10 @@ module.exports = class ServiceNowClient {
           validateStatus: () => true
         });
     this.username = username;
+    //rate limiting queues
+    this.readBucket = new sync.TokenBucket(40);
+    this.writeBucket = new sync.TokenBucket(80);
+    //submodules
     this.choice = new CChoice(this);
     this.column = new CColumn(this);
     this.delta = new CDelta(this);
@@ -156,22 +160,25 @@ module.exports = class ServiceNowClient {
       }
       //perform HTTP request, determine if we can rety
       let retry = false;
-      try {
-        this.debug(
-          `do: ${method} ${url}`,
-          request.params || "",
-          hasData ? request.data : ""
-        );
-        respErr = null;
-        resp = await this.api(request);
-      } catch (err) {
-        respErr = err.toString();
-        this.debug(`FAILED: do: ${method} ${url}`, respErr);
-        //tcp disconnected, retry
-        if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN") {
-          retry = true;
+      const bucket = isRead ? this.readBucket : this.writeBucket;
+      await bucket.run(async () => {
+        try {
+          this.debug(
+            `do: ${method} ${url}`,
+            request.params || "",
+            hasData ? request.data : ""
+          );
+          respErr = null;
+          resp = await this.api(request);
+        } catch (err) {
+          respErr = err.toString();
+          this.debug(`FAILED: do: ${method} ${url}`, respErr);
+          //tcp disconnected, retry
+          if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN") {
+            retry = true;
+          }
         }
-      }
+      });
       if (resp && resp.status === 429) {
         retry = true;
       }
