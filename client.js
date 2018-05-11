@@ -63,7 +63,8 @@ module.exports = class ServiceNowClient {
             username,
             password
           },
-          validateStatus: () => true
+          validateStatus: () => true,
+          timeout: 60 * 1000
         });
     this.username = username;
     //rate limiting queues
