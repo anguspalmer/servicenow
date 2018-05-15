@@ -55,6 +55,9 @@ exports.expandColumn = col => {
     case "string":
       default_length = 255;
       break;
+    case "choice":
+      default_length = 40;
+      break;
     case "bigint":
       col.type = "long";
     case "integer":
