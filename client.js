@@ -396,7 +396,7 @@ module.exports = class ServiceNowClient {
       // Rename the fields
       for (const row of results) {
         for (let f in renameFields) {
-          if (f in row) {
+          if (f in row && renameFields[f] !== f) {
             row[renameFields[f]] = row[f];
             delete row[f];
           }
