@@ -15,7 +15,7 @@ exports.one = arr => {
   if (!Array.isArray(arr)) {
     let obj = arr;
     if (!obj || typeof obj !== "object") {
-      throw `Expected object`;
+      throw new Error(`Expected object`);
     }
     return obj;
   }
@@ -23,7 +23,7 @@ exports.one = arr => {
     return null; //no result
   }
   if (arr.length > 1) {
-    throw `Multiple results`;
+    throw new Error(`Multiple results`);
   }
   return arr[0];
 };
