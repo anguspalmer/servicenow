@@ -1,4 +1,4 @@
-const sync = require("../sync");
+const sync = require("sync");
 const { one } = require("./util");
 
 //ci relationships.
