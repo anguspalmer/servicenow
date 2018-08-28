@@ -1,6 +1,7 @@
 const { titlize } = require("./util");
 
-//expand short-hand js table
+//expand short-hand js table,
+//should be no-op on a valid table
 exports.expandTable = table => {
   if (!table.name) {
     throw `Table must have a "name"`;
@@ -9,30 +10,31 @@ exports.expandTable = table => {
     let name = table.name.replace(/(u_)?(cmdb_)?(ci_)?/, "");
     table.label = titlize(name);
   }
-  if (!table.primaryKey) {
+  const cmdbTable = /cmdb/.test(table.name);
+  if (cmdbTable && !table.primaryKey) {
     table.primaryKey = "correlation_id";
   }
   if (table.allowDeletes !== true) {
     table.allowDeletes = false;
   }
-  for (let id in table.columns) {
-    let col = table.columns[id];
+  for (let key in table.columns) {
+    let col = table.columns[key];
+    //infer name property from key
     if (!col.name) {
-      //infer name
-      if (/cmdb/.test(table.name) && id === "name") {
+      if (cmdbTable && key === "name") {
         //out-of-the-box, use id as is
-        col.name = id;
+        col.name = key;
       } else {
         //add "u_" to id
-        col.name = `u_${id}`;
+        col.name = (/^u_/.test(key) ? "" : "u_") + key;
       }
     }
     exports.expandColumn(col);
-    table.columns[id] = col;
   }
 };
 
-//expand short-hand js column
+//expand short-hand js column,
+//should be no-op on a valid column
 exports.expandColumn = col => {
   if (!col.name) {
     throw `expand-column: "name" is missing`;
@@ -59,6 +61,7 @@ exports.expandColumn = col => {
       default_length = 40;
       break;
     case "bigint":
+    case "long":
       col.type = "long";
     case "integer":
     case "float":
@@ -67,6 +70,7 @@ exports.expandColumn = col => {
       default_length = 40;
       break;
     case "date":
+    case "glide_date_time":
       default_length = 40;
       col.type = "glide_date_time";
       break;
@@ -116,7 +120,6 @@ exports.expandColumn = col => {
 };
 
 //convert js column to sn column
-
 const snColumnMap = {
   sys_id: "sys_id",
   name: "element",

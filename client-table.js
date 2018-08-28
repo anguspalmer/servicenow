@@ -1,5 +1,6 @@
 const sync = require("sync");
 const { one, isGUID } = require("./util");
+const { expandTable } = require("./util-table");
 
 //split out table editing functionality
 module.exports = class CTable {
@@ -360,6 +361,9 @@ module.exports = class CTable {
     if (!tableName) {
       throw `Missing name from table spec`;
     }
+    //validate provided options and expand into defaults
+    expandTable(table);
+    //check sync option
     if (!opts) {
       opts = {};
     } else if (typeof opts !== "object") {
@@ -369,6 +373,7 @@ module.exports = class CTable {
     //perform diff
     let pending = {};
     //fetch and validate servicenow columns
+    this.log("sync pre-fetch existing table:", table.name);
     let existingTable = await this.get(table.name);
     if (!existingTable) {
       //add table and sync all columns
@@ -393,8 +398,25 @@ module.exports = class CTable {
       );
     }
     //commit pending actions straight away
-    if (opts.commit) {
-      return this.commitAll(pending);
+    if (opts.commit && (pending.table || pending.columns)) {
+      this.log("sync table commit all changes:", table.name);
+      const newTable = pending.table && !pending.columns;
+      //commit all
+      await this.commitAll(pending);
+      //commit all again?
+      if (newTable) {
+        //wait a bit...
+        sync.sleep(2000);
+        //recurse once to get column changes
+        let p = await this.sync(table);
+        const newCols = !p.table && p.columns;
+        if (!newCols) {
+          throw `expected new cols after table change`;
+        }
+        await this.commitAll(p);
+      }
+      //commited!
+      return true;
     }
     return pending;
   }
@@ -404,19 +426,21 @@ module.exports = class CTable {
    * @param {object} pending The pending operations.
    */
   async commitAll(pending) {
-    let columnChanges = Object.values(pending.columns);
-    let errors = columnChanges.filter(p => p.type === "error");
-    if (errors.length > 0) {
-      throw `Cannot commit changes, encountered ${errors.length} errors`;
-    }
     this.log(`committing all changes`);
     if (pending.table) {
       this.log(pending.table.description);
       await pending.table.commit();
     }
-    for (let change of columnChanges) {
-      this.log(change.description);
-      await change.commit();
+    if (pending.columns) {
+      let columnChanges = Object.values(pending.columns);
+      let errors = columnChanges.filter(p => p.type === "error");
+      if (errors.length > 0) {
+        throw `Cannot commit changes, encountered ${errors.length} errors`;
+      }
+      for (let change of columnChanges) {
+        this.log(change.description);
+        await change.commit();
+      }
     }
     return true;
   }

@@ -363,13 +363,14 @@ module.exports = class ServiceNowClient {
     const count = await this.getCount(tableName, query);
     if (count > 100000) {
       //never collect more than 100k to prevent memory-crashes
-      if (status) status.warn("found over 100k rows");
-      return [];
+      throw `table "${tableName}" has over 100,00 rows"`;
     }
     // Fetch from service now
     const limit = 500;
     const totalPages = Math.ceil(count / limit);
-    if (status) status.add(totalPages);
+    if (status && status.add) {
+      status.add(totalPages);
+    }
     let pages = [];
     for (let i = 0; i < totalPages; i++) {
       pages.push(i);
@@ -385,7 +386,9 @@ module.exports = class ServiceNowClient {
           sysparm_offset: page * limit
         }
       });
-      if (status) status.done(1);
+      if (status && status.done) {
+        status.done(1);
+      }
       totalRecords += results.length;
       if (totalPages > 1) {
         this.log(
