@@ -252,6 +252,14 @@ module.exports = class ServiceNowClient {
     return result;
   }
 
+  async authenticate() {
+    //check servicenow credentials
+    const snUser = await this.getUser();
+    this.log(
+      `servicenow authenticated as "${snUser.name}" on "${this.instance}"`
+    );
+  }
+
   /**
    * Returns the number of rows in the given table.
    * @param {string} tableName
