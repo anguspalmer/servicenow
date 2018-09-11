@@ -262,9 +262,7 @@ module.exports = class CSchema {
       } else if (t === "glide_date_time") {
         if (
           typeof v === "string" &&
-          /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(\.\d{3}) [\+\-]\d{2}:\d{2})$/.test(
-            v
-          )
+          (dateTimeZone.test(v) || dateTimeUTC.test(v))
         ) {
           v = new Date(v);
         }
@@ -295,3 +293,6 @@ module.exports = class CSchema {
     this.log("WARNING", ...args);
   }
 };
+
+const dateTimeZone = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [\+\-]\d{2}:\d{2}$/;
+const dateTimeUTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;

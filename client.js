@@ -1,5 +1,6 @@
 const axios = require("axios");
-const { cache } = require("cache");
+const { FileStorage } = require("cache");
+const cache = new FileStorage("sn-api");
 const sync = require("sync");
 const crypto = require("crypto");
 const md5 = m =>
@@ -52,7 +53,6 @@ module.exports = class ServiceNowClient {
       sysparm_exclude_reference_link: true
     };
     this.readOnly = config.readOnly === true;
-    this.enableCache = config.cache === true;
     this.enableDebug = config.debug === true;
     this.fake = fake;
     this.api = fake
@@ -326,6 +326,8 @@ module.exports = class ServiceNowClient {
    */
   async getRecords(tableName, opts = {}) {
     let { columns, query, fields = [], status } = opts;
+    //individual request caching
+    const cacheRecords = opts.cache === true;
     //prepare params for all requests
     let params = {
       ...this.defaultParams
@@ -351,20 +353,32 @@ module.exports = class ServiceNowClient {
     if (fields.length > 0) {
       params.sysparm_fields = fields.join(",");
     }
-    if (query) {
-      params.sysparm_query = query;
-    }
     // Response data
     let data;
     // Attempt to load cached data?
     let cacheKey;
-    if (this.enableCache) {
+    if (cacheRecords && !/sys_updated_on/.test(query)) {
       cacheKey = `${tableName}-${md5(JSON.stringify([columns, query]))}`;
-      data = await cache.get(cacheKey, this.fake ? null : "1s");
-      if (data) {
-        // Successfully loaded from cache
-        this.log(`Using local cache of ${tableName}`);
-        return data;
+      const data = await cache.get(cacheKey);
+      if (Array.isArray(data)) {
+        const mtime = await cache.mtime(cacheKey);
+        const q = [];
+        if (query) {
+          q.push(query);
+        }
+        q.push(
+          `sys_updated_on<=${mtime
+            .toISOString()
+            .replace("T", " ")
+            .replace(/(\.\d+)?Z/, "")}`
+        );
+        const countQuery = q.join("^");
+        const datasetSize = await this.getCount(tableName, countQuery);
+        if (data.length === datasetSize) {
+          //none have changed, safe to use cache
+          this.log(`Using cache (${cacheKey})`);
+          return data;
+        }
       }
     }
     // Count number of records
@@ -374,6 +388,9 @@ module.exports = class ServiceNowClient {
       throw `table "${tableName}" has over 100,00 rows"`;
     }
     // Fetch from service now
+    if (query) {
+      params.sysparm_query = query;
+    }
     const limit = 500;
     const totalPages = Math.ceil(count / limit);
     if (status && status.add) {
@@ -418,7 +435,7 @@ module.exports = class ServiceNowClient {
     // join all parts
     data = [].concat(...datas);
     // Cache for future
-    if (this.enableCache && data && data.length > 0) {
+    if (cacheRecords && data && data.length > 0) {
       await cache.put(cacheKey, data);
     }
     return data;
