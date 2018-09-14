@@ -12,7 +12,7 @@ const Backoff = require("backo");
 const xml2js = require("xml2js");
 const parseXML = sync.promisify(xml2js.parseString);
 const fakeApi = require("./fake-api");
-const { prop, one, isGUID } = require("./util");
+const { prop, one, isGUID, snowDate } = require("./util");
 //client-class splits
 const CChoice = require("./client-choice");
 const CColumn = require("./client-column");
@@ -291,7 +291,7 @@ module.exports = class ServiceNowClient {
     });
     let count = prop(result, "stats", "count");
     if (!/^\d+$/.test(count)) {
-      throw `Invalid count response`;
+      throw `Invalid count response ("${count})`;
     }
     return parseInt(count, 10);
   }
@@ -359,25 +359,29 @@ module.exports = class ServiceNowClient {
     let cacheKey;
     if (cacheRecords && !/sys_updated_on/.test(query)) {
       cacheKey = `${tableName}-${md5(JSON.stringify([columns, query]))}`;
-      const data = await cache.get(cacheKey);
+      const mtime = snowDate(await cache.mtime(cacheKey));
+      const data = mtime ? await cache.get(cacheKey) : null;
+      //have cached rows!
       if (Array.isArray(data)) {
-        const mtime = await cache.mtime(cacheKey);
         const q = [];
         if (query) {
           q.push(query);
         }
-        q.push(
-          `sys_updated_on<=${mtime
-            .toISOString()
-            .replace("T", " ")
-            .replace(/(\.\d+)?Z/, "")}`
+        const updatedAfter = await this.getCount(
+          tableName,
+          q.concat(`sys_updated_on>=${mtime}`).join("^")
         );
-        const countQuery = q.join("^");
-        const datasetSize = await this.getCount(tableName, countQuery);
-        if (data.length === datasetSize) {
-          //none have changed, safe to use cache
-          this.log(`Using cache (${cacheKey})`);
-          return data;
+        //no new rows added!
+        if (updatedAfter === 0) {
+          const updatedBefore = await this.getCount(
+            tableName,
+            q.concat(`sys_updated_on<=${mtime}`).join("^")
+          );
+          //none have changed since cache time, safe to use
+          if (updatedBefore === data.length) {
+            this.log(`Using cache (${cacheKey})`);
+            return data;
+          }
         }
       }
     }

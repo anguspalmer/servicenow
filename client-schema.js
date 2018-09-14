@@ -1,5 +1,5 @@
 const sync = require("sync");
-const { prop } = require("./util");
+const { prop, snowDate } = require("./util");
 const EXPIRES_AT = Symbol();
 
 module.exports = class CSchema {
@@ -269,11 +269,7 @@ module.exports = class CSchema {
         if (!(v instanceof Date)) {
           throw `"${k}" expected date (got ${typeof v} ${v})`;
         }
-        v.setMilliseconds(0); //SN cannot store millis
-        v = v
-          .toISOString()
-          .replace("T", " ")
-          .replace(".000Z", "");
+        v = snowDate(v);
       }
       //sanity check
       if (typeof v !== "string") {

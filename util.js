@@ -109,3 +109,14 @@ exports.subsetOf = (small, big) => {
   }
   return big === small;
 };
+
+exports.snowDate = date => {
+  //is valid date object
+  if (date && date instanceof Date && !isNaN(+date)) {
+    return date
+      .toISOString()
+      .replace("T", " ")
+      .replace(/(\.\d+)?Z/, "");
+  }
+  return null;
+};

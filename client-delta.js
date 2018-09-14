@@ -33,9 +33,10 @@ module.exports = class CDelta {
       //by default, hash all user keys and values
       primaryKey = row => {
         const h = crypto.createHash("md5");
-        for (const key of Object.keys(row)
+        const keys = Object.keys(row)
           .filter(k => k.startsWith("u_"))
-          .sort()) {
+          .sort();
+        for (const key of keys) {
           h.update(`${key}=${row[key]}`);
         }
         return h.digest("hex");
@@ -63,7 +64,8 @@ module.exports = class CDelta {
     //load all existing rows
     const existingRows = await this.client.getRecords(tableName, {
       // query: `sys_created_by: ${this.client.username}`,
-      status
+      status,
+      cache: true
     });
     if (!Array.isArray(existingRows)) {
       throw `Existing rows must be an array`;
@@ -82,17 +84,22 @@ module.exports = class CDelta {
       incoming: {},
       existing: {}
     };
+    const duplicates = {
+      incoming: [],
+      existing: []
+    };
     //validate and index all rows
     for (const type in rawRows) {
       const missing = new Set();
-      const duplicates = new Set();
+      const duplicatePks = new Set();
       for (let row of rawRows[type]) {
         let snRow = await this.client.schema.convertSN(tableName, row);
         let cid = primaryKey(snRow);
         if (cid) {
           //only index rows with a pk
           if (cid in index[type]) {
-            duplicates.add(cid);
+            duplicatePks.add(cid);
+            duplicates[type].push(row);
             continue;
           }
           index[type][cid] = snRow;
@@ -103,10 +110,14 @@ module.exports = class CDelta {
         processedRows[type].push(snRow);
       }
       if (missing.size > 0) {
-        status.warn(`Found #${missing.size} ${type} rows with no primary key`);
+        status.warn(`found #${missing.size} ${type} rows with no primary key`);
       }
-      if (duplicates.size > 0) {
-        status.warn(`Found #${duplicates.size} ${type} duplicate rows`);
+      if (duplicatePks.size > 0) {
+        let action = "ignoring";
+        if (allowDeletes && type === "existing") {
+          action = "deleting";
+        }
+        status.warn(`${action} #${duplicatePks.size} ${type} duplicate rows`);
       }
     }
     status.log(
@@ -188,19 +199,32 @@ module.exports = class CDelta {
     }
     //pending deletes (if deletes are possible)
     if (allowDeletes || hasDeletedFlag) {
+      //find set of sys_ids to delete
+      const sysIds = [];
+      //check if not in the index
       for (let existingRow of processedRows.existing) {
         let cid = primaryKey(existingRow);
-        if (cid && cid in index.incoming) {
+        if (!cid || cid in index.incoming) {
           continue;
         }
-        let payload = {
-          sys_id: existingRow.sys_id
-        };
+        if (
+          !allowDeletes &&
+          hasDeletedFlag &&
+          existingRow[deletedFlag] === "0"
+        ) {
+          continue; //already "deleted"
+        }
+        sysIds.push(existingRow.sys_id);
+      }
+      //existing duplicates should be wiped
+      for (let existingRow of duplicates.existing) {
+        sysIds.push(existingRow.sys_id);
+      }
+      //prepare sn object
+      for (let sysId of sysIds) {
+        let payload = { sys_id: sysId };
         //missing from incoming, delete it!
         if (hasDeletedFlag) {
-          if (!allowDeletes && existingRow[deletedFlag] === "0") {
-            continue; //already "deleted"
-          }
           payload[deletedFlag] = "0"; //mark deleted
         }
         pending.delete.push(payload);
