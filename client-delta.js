@@ -28,19 +28,13 @@ module.exports = class CDelta {
       //pick single key
       const k = primaryKey;
       primaryKey = row => row[k];
-    }
-    if (primaryKey === undefined) {
-      //by default, hash all user keys and values
-      primaryKey = row => {
-        const h = crypto.createHash("md5");
-        const keys = Object.keys(row)
-          .filter(k => k.startsWith("u_"))
-          .sort();
-        for (const key of keys) {
-          h.update(`${key}=${row[key]}`);
-        }
-        return h.digest("hex");
-      };
+    } else if (Array.isArray(primaryKey)) {
+      //object hasher, using the provided keys
+      const primaryKeys = primaryKey;
+      primaryKey = objectHasher(primaryKeys);
+    } else if (primaryKey === undefined) {
+      //object hasher, using all keys
+      primaryKey = objectHasher();
     }
     if (typeof primaryKey !== "function") {
       throw `Primary key must be function or string`;
@@ -63,7 +57,6 @@ module.exports = class CDelta {
     }
     //load all existing rows
     const existingRows = await this.client.getRecords(tableName, {
-      // query: `sys_created_by: ${this.client.username}`,
       status,
       cache: true
     });
@@ -308,3 +301,26 @@ module.exports = class CDelta {
     this.client.debug("[delta]", ...args);
   }
 };
+
+function objectHasher(keys) {
+  return function(row) {
+    const h = crypto.createHash("md5");
+    const ks = (keys || Object.keys(row))
+      .filter(k => k.startsWith("u_"))
+      .sort();
+    for (const key of ks) {
+      h.update(`${key}=${row[key]}`);
+    }
+    return h.digest("hex");
+  };
+}
+
+// function pick(src, keys) {
+//   const dst = {};
+//   for (let key of keys) {
+//     if (key in src) {
+//       dst[key] = src[key];
+//     }
+//   }
+//   return dst;
+// }

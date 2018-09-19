@@ -1,6 +1,6 @@
 const axios = require("axios");
 const { FileStorage } = require("cache");
-const cache = new FileStorage("sn-api");
+const cache = new FileStorage("sn-cache");
 const sync = require("sync");
 const crypto = require("crypto");
 const md5 = m =>
@@ -327,11 +327,17 @@ module.exports = class ServiceNowClient {
   async getRecords(tableName, opts = {}) {
     let { columns, query, fields = [], status } = opts;
     //individual request caching
-    const cacheRecords = opts.cache === true;
+    let cacheRecords = opts.cache === true;
     //prepare params for all requests
     let params = {
       ...this.defaultParams
     };
+    if (!query) {
+      query = "";
+    }
+    if (!Array.isArray(fields)) {
+      throw `expected fields to be an array`;
+    }
     // limit results to specified columns
     let renameFields = {};
     if (columns) {
@@ -358,7 +364,11 @@ module.exports = class ServiceNowClient {
     // Attempt to load cached data?
     let cacheKey;
     if (cacheRecords && !/sys_updated_on/.test(query)) {
-      cacheKey = `${tableName}-${md5(JSON.stringify([columns, query]))}`;
+      cacheKey = tableName;
+      //custom query? encode as a hash
+      if (fields.length > 0 || query) {
+        cacheKey += `-${md5(JSON.stringify([fields, query]))}`;
+      }
       const mtime = snowDate(await cache.mtime(cacheKey));
       const data = mtime ? await cache.get(cacheKey) : null;
       //have cached rows!
