@@ -1,6 +1,7 @@
 const sync = require("sync");
 const { prop, snowDate } = require("./util");
 const EXPIRES_AT = Symbol();
+const EXPIRE_AFTER = 5 * 60 * 1000;
 
 module.exports = class CSchema {
   constructor(client) {
@@ -76,7 +77,7 @@ module.exports = class CSchema {
       schema[col.name] = col;
     });
     //add to cache with 5 minute expiry
-    schema[EXPIRES_AT] = +new Date() + 5 * 60 * 1000;
+    schema[EXPIRES_AT] = +new Date() + EXPIRE_AFTER;
     this.cache[tableName] = schema;
     done();
     //return!

@@ -435,7 +435,8 @@ module.exports = class CTable {
       let columnChanges = Object.values(pending.columns);
       let errors = columnChanges.filter(p => p.type === "error");
       if (errors.length > 0) {
-        throw `Cannot commit changes, encountered ${errors.length} errors`;
+        throw `Cannot commit changes, encountered ${errors.length} errors: ` +
+          errors.map(p => p.description).join(",");
       }
       for (let change of columnChanges) {
         this.log(change.description);
