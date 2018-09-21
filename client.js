@@ -1,6 +1,6 @@
 const axios = require("axios");
-const { FileStorage } = require("cache");
-const cache = new FileStorage("sn-cache");
+const { cache } = require("cache");
+const recordCache = cache.sub("sn-cache");
 const sync = require("sync");
 const crypto = require("crypto");
 const md5 = m =>
@@ -369,8 +369,8 @@ module.exports = class ServiceNowClient {
       if (fields.length > 0 || query) {
         cacheKey += `-${md5(JSON.stringify([fields, query]))}`;
       }
-      const mtime = snowDate(await cache.mtime(cacheKey));
-      const data = mtime ? await cache.get(cacheKey) : null;
+      const mtime = snowDate(await recordCache.mtime(cacheKey));
+      const data = mtime ? await recordCache.get(cacheKey) : null;
       //have cached rows!
       if (Array.isArray(data)) {
         const q = [];
@@ -450,7 +450,7 @@ module.exports = class ServiceNowClient {
     data = [].concat(...datas);
     // Cache for future
     if (cacheRecords && data && data.length > 0) {
-      await cache.put(cacheKey, data);
+      await recordCache.put(cacheKey, data);
     }
     return data;
   }
