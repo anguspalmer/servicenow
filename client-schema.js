@@ -251,8 +251,8 @@ module.exports = class CSchema {
         }
         v = `${Math.round(v)}`;
       } else if (t == "string") {
-        //convert number to string
-        if (typeof v === "number") {
+        //convert boolean and number to string
+        if (typeof v === "boolean" || typeof v === "number") {
           v = String(v);
         }
         //trim length
@@ -274,7 +274,7 @@ module.exports = class CSchema {
       }
       //sanity check
       if (typeof v !== "string") {
-        throw `"${k}" expected string (found type '${t}/${typeof v}' with value '${v}')`;
+        throw `"${k}" expected string (found type '${typeof v}' with value '${v}')`;
       }
       //ready!
       row[k] = v;
