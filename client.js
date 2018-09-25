@@ -364,7 +364,7 @@ module.exports = class ServiceNowClient {
     // Attempt to load cached data?
     let cacheKey;
     if (cacheRecords && !/sys_updated_on/.test(query)) {
-      cacheKey = tableName;
+      cacheKey = `${this.instance}-${tableName}`;
       //custom query? encode as a hash
       if (fields.length > 0 || query) {
         cacheKey += `-${md5(JSON.stringify([fields, query]))}`;
