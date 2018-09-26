@@ -1,7 +1,6 @@
 const sync = require("sync");
 const { one } = require("./util");
-
-//ci relationships.
+const CONCURRENCY = 20;
 
 module.exports = class CRelate {
   constructor(client) {
@@ -20,8 +19,10 @@ module.exports = class CRelate {
     //load all existing rows
     const rows = await this.client.getRecords(tableName, {
       columns,
-      status
+      status,
+      cache: true
     });
+    //sync relationships!
     return await this.rows(rows, relationships, status);
   }
 
@@ -77,7 +78,6 @@ module.exports = class CRelate {
       }
       const parent_descriptor = RegExp.$1;
       const child_descriptor = RegExp.$2;
-      const fields = { parent_descriptor, child_descriptor };
       const query =
         `parent_descriptor=${parent_descriptor}^` +
         `child_descriptor=${child_descriptor}`;
@@ -90,8 +90,13 @@ module.exports = class CRelate {
       const get = async () => one(await this.client.do(request));
       let record = await get();
       if (!record) {
+        //TODO: jpillora: 26/9/2018:
+        //create relationship fails if EITHER parent or child already exists
+        //on another relationship
         status.log(`creating relationship: "${relationship}"`);
+        const fields = { parent_descriptor, child_descriptor };
         await this.client.create("cmdb_rel_type", fields);
+        await sync.sleep(3000); //let the type spread through servicenow...
         record = await get();
       }
       if (typeIds.has(record.sys_id)) {
@@ -102,9 +107,9 @@ module.exports = class CRelate {
     }
     const typeNames = Object.keys(types);
     if (typeNames.length === 0) {
-      return true; //related all rows successfully!
+      //no rows to relate
+      return true;
     }
-    // status.log(`loaded types`, typeNames);
     //compute all relationships for all types
     for (const columnName in types) {
       const type = types[columnName];
@@ -130,22 +135,30 @@ module.exports = class CRelate {
         };
         newRels.push(newRel);
       }
+      //DEBUG
+      // if (/vm_instance/.test(columnName)) while (newRels.length > 30) newRels.pop();
+
       //compute all existing relationships
       //(get all, exclude those not matching the incoming set)
       const existingRels = (await this.client.getRecords("cmdb_rel_ci", {
         status,
         fields: ["sys_id", "parent", "child"],
-        query: `type=${type.sys_id}`
+        query: `type=${type.sys_id}`,
+        cache: true
       })).filter(rel => {
         return sourceIds.has(rel.parent);
       });
       //print status
-      if (status)
-        status.log(`syncing CI relationships (total #${newRels.length})...`);
+      if (status) {
+        status.log(
+          `syncing CI relationships ` +
+            `(incoming #${newRels.length}, existing #${existingRels.length})`
+        );
+      }
       //perform diff!
       let results = await sync.diff({
         status,
-        concurrency: 10,
+        concurrency: CONCURRENCY,
         prev: existingRels,
         next: newRels,
         index: rel => `${rel.parent}|${rel.child}`,
