@@ -10,6 +10,10 @@ module.exports = class CChoice {
     if (!choiceMap) {
       throw `Column (${colName}) missing choice map`;
     }
+    const user = await this.client.getUser();
+    if (!user) {
+      throw `Not authenticated`;
+    }
     let newChoices = [];
     for (let value in choiceMap) {
       newChoices.push({
@@ -17,6 +21,7 @@ module.exports = class CChoice {
         element: colName,
         value,
         label: choiceMap[value],
+        sys_domain: user.sys_domain.value,
         inactive: false
       });
     }

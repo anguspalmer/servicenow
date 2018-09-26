@@ -258,6 +258,7 @@ module.exports = class ServiceNowClient {
     this.log(
       `servicenow authenticated as "${snUser.name}" on "${this.instance}"`
     );
+    return snUser;
   }
 
   /**
