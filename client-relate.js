@@ -92,12 +92,13 @@ module.exports = class CRelate {
       if (!record) {
         //TODO: jpillora: 26/9/2018:
         //create relationship fails if EITHER parent or child already exists
-        //on another relationship
-        status.log(`creating relationship: "${relationship}"`);
-        const fields = { parent_descriptor, child_descriptor };
-        await this.client.create("cmdb_rel_type", fields);
-        await sync.sleep(3000); //let the type spread through servicenow...
-        record = await get();
+        //on another relationship. also, randomly API-created relationships
+        //appear as blank in the "CI relationship" widget. for now create manually.
+        throw `Missing relationship type "${relationship}". Please create manually.`;
+        // status.log(`creating relationship: "${relationship}"`);
+        // const fields = { parent_descriptor, child_descriptor };
+        // await this.client.create("cmdb_rel_type", fields);
+        // record = await get();
       }
       if (typeIds.has(record.sys_id)) {
         throw `Multiple relationships for type "${record.name}"`;
