@@ -74,6 +74,10 @@ exports.expandColumn = col => {
       default_length = 40;
       col.type = "glide_date_time";
       break;
+    case "reference_list":
+      default_length = 4000;
+      col.type = "glide_list";
+      break;
     case "reference":
     case "guid":
       default_length = 32;
@@ -84,7 +88,8 @@ exports.expandColumn = col => {
   if (!col.max_length) {
     col.max_length = default_length;
   }
-  if (col.type === "reference" && !col.reference_table) {
+  const isReference = col.type === "reference" || col.type === "glide_list";
+  if (isReference && !col.reference_table) {
     throw `expand-column: "${col.name}" is missing` +
       ` the "reference_table" property`;
   }
