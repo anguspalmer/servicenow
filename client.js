@@ -68,8 +68,9 @@ module.exports = class ServiceNowClient {
         });
     this.username = username;
     //rate limiting queues
-    this.readBucket = new sync.TokenBucket(40);
-    this.writeBucket = new sync.TokenBucket(80);
+    let { readConcurrency = 40, writeConcurrency = 80 } = config;
+    this.readBucket = new sync.TokenBucket(readConcurrency);
+    this.writeBucket = new sync.TokenBucket(writeConcurrency);
     //submodules
     this.choice = new CChoice(this);
     this.column = new CColumn(this);
@@ -79,6 +80,14 @@ module.exports = class ServiceNowClient {
     this.relate = new CRelate(this);
     this.schema = new CSchema(this);
     this.table = new CTable(this);
+  }
+
+  get numReads() {
+    return this.readBucket.numTotal;
+  }
+
+  get numWrites() {
+    return this.writeBucket.numTotal;
   }
 
   /**
