@@ -164,11 +164,11 @@ module.exports = class CRelate {
         next: newRels,
         index: rel => `${rel.parent}|${rel.child}`,
         create: async newRel => {
-          status.log(`relate: ${newRel.parent} -> ${newRel.child}`);
+          // status.log(`relate: ${newRel.parent} -> ${newRel.child}`);
           await this.client.create("cmdb_rel_ci", newRel);
         },
         delete: async existingRel => {
-          status.log(`unrelate: ${existingRel.parent} -> ${existingRel.child}`);
+          // status.log(`unrelate: ${existingRel.parent} -> ${existingRel.child}`);
           await this.client.delete("cmdb_rel_ci", existingRel);
         }
       });
