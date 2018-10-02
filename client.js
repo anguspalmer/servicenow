@@ -400,6 +400,28 @@ module.exports = class ServiceNowClient {
           //none have changed since cache time, safe to use
           if (updatedBefore === data.length) {
             this.log(`Using cache (${cacheKey})`);
+            //JSON cannot store date objects, so we must convert all
+            //date columns from strings into Dates.
+            //TODO: @jpillora: 'data' should also contain schema!
+            const s = await this.schema.get(tableName);
+            const dates = [];
+            for (let k in s) {
+              if (s[k].type === "glide_date_time") {
+                dates.push(k);
+              }
+            }
+            for (let row of data) {
+              for (let k of dates) {
+                const v = row[k];
+                if (v) {
+                  const d = new Date(v);
+                  if (!isNaN(+d)) {
+                    row[k] = d;
+                  }
+                }
+              }
+            }
+            //ready
             return data;
           }
         }
