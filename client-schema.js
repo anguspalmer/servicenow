@@ -1,5 +1,5 @@
 const sync = require("sync");
-const { prop, snowDate } = require("./util");
+const { prop, snowDate, round } = require("./util");
 const EXPIRES_AT = Symbol();
 const EXPIRE_AFTER = 5 * 60 * 1000;
 
@@ -155,12 +155,12 @@ module.exports = class CSchema {
         }
         v = i;
       } else if (t === "float" || t === "decimal") {
+        //will either have up to 7 or 2 decimal places
         let i = parseFloat(v, 10);
         if (isNaN(i)) {
           throw `Invalid float/decimal "${v}"`;
         }
         v = i;
-        3;
       } else if (t === "glide_date_time") {
         if (!/^(\d\d\d\d-\d\d-\d\d) (\d\d:\d\d:\d\d)$/.test(v)) {
           throw `Unexpected date format "${v}"`;
@@ -239,9 +239,12 @@ module.exports = class CSchema {
         if (typeof v !== "number" || isNaN(v)) {
           throw `"${k}" expected number "${v}"`;
         }
-        // let places = 2
-        //TODO calc number of places, scope
-        v = `${Math.round(v * 100) / 100}`; //2 places
+        //round specific number of places.
+        //see https://docs.servicenow.com/bundle/london-platform-administration/page/administer/reference-pages/reference/r_FieldTypes.html
+        //"Decimal - Number with up to two digits after the decimal points (for example, 12.34)."
+        //"Floating Point Number - Number with up to seven digits after the decimal point"
+        const places = t === "float" ? 7 : 2;
+        v = `${round(v, places)}`;
       } else if (t === "integer" || t === "long") {
         if (typeof v === "string") {
           v = parseInt(v, 10);

@@ -215,11 +215,7 @@ module.exports = class ServiceNowClient {
       throw `Unexpected error (${resp.statusText})`;
     }
     if (!data) {
-      // if (isRead) {
       throw `Expected response data (${method} ${url})`;
-      // } else {
-      //   return true;
-      // }
     }
     //validate type
     let contentType = resp.headers["content-type"] || "";
@@ -336,6 +332,8 @@ module.exports = class ServiceNowClient {
    */
   async getRecords(tableName, opts = {}) {
     let { columns, query, fields = [], status } = opts;
+    //pick logger
+    const logger = status || this;
     //individual request caching
     let cacheRecords = opts.cache === true;
     //prepare params for all requests
@@ -399,7 +397,7 @@ module.exports = class ServiceNowClient {
           );
           //none have changed since cache time, safe to use
           if (updatedBefore === data.length) {
-            this.log(`Using cache (${cacheKey})`);
+            logger.log(`Read cache: ${cacheKey}`);
             //JSON cannot store date objects, so we must convert all
             //date columns from strings into Dates.
             //TODO: @jpillora: 'data' should also contain schema!
@@ -462,7 +460,7 @@ module.exports = class ServiceNowClient {
       }
       totalRecords += results.length;
       if (totalPages > 1) {
-        this.log(
+        logger.log(
           `got #${totalRecords} records from "${tableName}"` +
             ` (page ${page + 1}/${totalPages})`
         );
@@ -483,6 +481,7 @@ module.exports = class ServiceNowClient {
     // Cache for future
     if (cacheRecords && data && data.length > 0) {
       await recordCache.put(cacheKey, data);
+      logger.log(`Wrote cache: ${cacheKey}`);
     }
     return data;
   }

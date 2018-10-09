@@ -173,7 +173,7 @@ module.exports = class CColumn {
       let changedChoices = false;
       if (col.choice_map) {
         if (!isEqual(col.choice_map, ecol.choice_map)) {
-          console.log("CHOICE DIFF", col.choice_map, ecol.choice_map)
+          console.log("CHOICE DIFF", col.choice_map, ecol.choice_map);
           detail.push(`choice list`);
           changedChoices = true;
           ncol.choice_map = col.choice_map;
@@ -187,11 +187,6 @@ module.exports = class CColumn {
         );
         changedDataPolicy = true;
         ncol.data_policy = col.data_policy;
-      }
-      //anything changed?
-      let changed = changedField || changedChoices || changedDataPolicy;
-      if (!changed) {
-        continue;
       }
       //ensure these columns match
       let match = true;
@@ -210,6 +205,11 @@ module.exports = class CColumn {
         }
       }
       if (!match) {
+        continue;
+      }
+      //anything changed?
+      let changed = changedField || changedChoices || changedDataPolicy;
+      if (!changed) {
         continue;
       }
       //ensure changes are allowed

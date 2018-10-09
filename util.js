@@ -120,3 +120,8 @@ exports.snowDate = date => {
   }
   return null;
 };
+
+exports.round = (n, places = 2) => {
+  const factor = Math.pow(10, places);
+  return Math.round(n * factor) / factor;
+};
