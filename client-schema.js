@@ -103,7 +103,7 @@ module.exports = class CSchema {
       throw `Invalid row`;
     }
     let obj = {};
-    for (let key in row) {
+    for (let key of Object.keys(row).sort()) {
       let k = key;
       let kschema = schema;
       let o = obj;
