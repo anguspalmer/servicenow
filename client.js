@@ -82,12 +82,16 @@ module.exports = class ServiceNowClient {
     this.table = new CTable(this);
   }
 
+  //number of active reads occuring right now.
+  //this should never surpass <readConcurrency>.
   get numReads() {
-    return this.readBucket.numTotal;
+    return this.readBucket.numTokens;
   }
 
+  //number of active writes occuring right now.
+  //this should never surpass <writeConcurrency>.
   get numWrites() {
-    return this.writeBucket.numTotal;
+    return this.writeBucket.numTokens;
   }
 
   /**
@@ -557,7 +561,7 @@ module.exports = class ServiceNowClient {
 
   debug(...args) {
     if (this.enableDebug) {
-      this.log("<DEBUG>", ...args);
+      console.error("[snc] <DEBUG>", ...args);
     }
   }
 };
