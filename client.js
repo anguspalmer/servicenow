@@ -483,7 +483,7 @@ module.exports = class ServiceNowClient {
     // join all parts
     data = [].concat(...datas);
     // Cache for future
-    if (cacheRecords && data && data.length > 0) {
+    if (cacheRecords && cacheKey && data && data.length > 0) {
       await recordCache.put(cacheKey, data);
       logger.log(`Wrote cache: ${cacheKey}`);
     }
