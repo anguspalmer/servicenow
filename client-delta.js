@@ -23,6 +23,7 @@ module.exports = class CDelta {
     } else if (!Array.isArray(rows)) {
       throw `Incoming rows must be an array`;
     }
+    const incomingRows = rows;
     let { primaryKey, deletedFlag, allowDeletes } = run;
     if (typeof primaryKey === "string") {
       //pick single key
@@ -55,6 +56,73 @@ module.exports = class CDelta {
         done: () => {}
       };
     }
+    //load table schema
+    let schema = await this.client.schema.get(tableName);
+    //optional reference lookup tables
+    const referenceIndex = {};
+    const { referenceLookup } = run;
+    if (referenceLookup) {
+      //reference lookups have been provided.
+      //lookup all columns and create indexes for them.
+      for (let colName in referenceLookup) {
+        const col = schema[colName];
+        if (!col) {
+          throw `reference column (${colName}) does not exist on ${tableName}`;
+        }
+        const refTable = col.reference_table;
+        if (!refTable) {
+          throw `column (${colName}) is not a reference field`;
+        }
+        const lookup = referenceLookup[colName];
+        let ref;
+        if (typeof lookup === "string") {
+          ref = { field: lookup };
+        } else {
+          ref = lookup;
+        }
+        if (!ref || !ref.field) {
+          throw `reference column (${colName}) missing ref field`;
+        }
+        this.log(`merge: indexing "${refTable}"...`);
+        const refSchema = await this.client.schema.get(refTable);
+        const refCol = refSchema[ref.field];
+        if (!refCol) {
+          throw `reference field (${ref.field}) does not exist on ${refTable}`;
+        }
+        const pairs = await this.client.getRecords(refTable, {
+          fields: ["sys_id", ref.field],
+          cache: true,
+          status
+        });
+        const tableIndex = {};
+        for (const pair of pairs) {
+          const key = pair[ref.field];
+          //TODO show duplicates?
+          tableIndex[key] = pair.sys_id;
+        }
+        this.log(`merge: indexed #${pairs.length} "${refTable}" mappings`);
+        referenceIndex[refTable] = tableIndex;
+      }
+      //look at incoming data and swap out the appropriate values
+      for (let row of incomingRows) {
+        for (let colName in referenceLookup) {
+          const value = row[colName];
+          if (!value) {
+            continue; //skip empty columns
+          }
+          const col = schema[colName];
+          const refTable = col.reference_table;
+          const tableIndex = referenceIndex[refTable];
+          if (value in tableIndex) {
+            const sysId = tableIndex[value];
+            row[colName] = sysId;
+          } else {
+            this.log(`merge: "${refTable}" index is missing "${value}"`);
+          }
+        }
+      }
+      //references have now been added into incoming rows
+    }
     //load all existing rows
     const existingRows = await this.client.getRecords(tableName, {
       status,
@@ -63,7 +131,6 @@ module.exports = class CDelta {
     if (!Array.isArray(existingRows)) {
       throw `Existing rows must be an array`;
     }
-    const incomingRows = rows;
     const rawRows = {
       incoming: incomingRows,
       existing: existingRows
@@ -125,8 +192,6 @@ module.exports = class CDelta {
       update: [],
       delete: []
     };
-    //load table schema
-    let schema = await this.client.schema.get(tableName);
     //determine if flag can be used
     const hasDeletedFlag = deletedFlag in schema;
     //pending creates/updates
