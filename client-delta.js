@@ -106,7 +106,7 @@ module.exports = class CDelta {
       //look at incoming data and swap out the appropriate values
       for (let row of incomingRows) {
         for (let colName in referenceLookup) {
-          const value = row[colName];
+          let value = row[colName];
           if (!value) {
             continue; //skip empty columns
           }
@@ -115,10 +115,12 @@ module.exports = class CDelta {
           const tableIndex = referenceIndex[refTable];
           if (value in tableIndex) {
             const sysId = tableIndex[value];
-            row[colName] = sysId;
+            value = sysId; //swap
           } else {
             this.log(`merge: "${refTable}" index is missing "${value}"`);
+            value = null;
           }
+          row[colName] = value;
         }
       }
       //references have now been added into incoming rows
@@ -379,13 +381,3 @@ function objectHasher(keys) {
     return h.digest("hex");
   };
 }
-
-// function pick(src, keys) {
-//   const dst = {};
-//   for (let key of keys) {
-//     if (key in src) {
-//       dst[key] = src[key];
-//     }
-//   }
-//   return dst;
-// }

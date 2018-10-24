@@ -1,5 +1,5 @@
 const sync = require("sync");
-const { prop, snowDate, round } = require("./util");
+const { prop, snowDate, round, isGUID } = require("./util");
 const EXPIRES_AT = Symbol();
 const EXPIRE_AFTER = 5 * 60 * 1000;
 
@@ -274,6 +274,12 @@ module.exports = class CSchema {
           throw `"${k}" expected date (got ${typeof v} ${v})`;
         }
         v = snowDate(v);
+      } else if (t === "reference") {
+        if (!v) {
+          v = "";
+        } else if (!isGUID(v)) {
+          throw `"${k}" expected guid string (got ${v})`;
+        }
       }
       //sanity check
       if (typeof v !== "string") {

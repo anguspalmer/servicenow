@@ -80,6 +80,8 @@ module.exports = class ServiceNowClient {
     this.relate = new CRelate(this);
     this.schema = new CSchema(this);
     this.table = new CTable(this);
+    //ready
+    this.log(`using cache dir: ${recordCache.base}`);
   }
 
   //number of active reads occuring right now.
