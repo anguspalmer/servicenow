@@ -56,6 +56,8 @@ module.exports = class CDelta {
         done: () => {}
       };
     }
+    const log = status.log.bind(status, `[sn-delta]`);
+    const warn = status.warn.bind(status, `[sn-delta:${tableName}]`);
     //load table schema
     let schema = await this.client.schema.get(tableName);
     //optional reference lookup tables
@@ -83,7 +85,7 @@ module.exports = class CDelta {
         if (!ref || !ref.field) {
           throw `reference column (${colName}) missing ref field`;
         }
-        this.log(`merge: indexing "${refTable}"...`);
+        log(`merge: indexing "${refTable}"...`);
         const refSchema = await this.client.schema.get(refTable);
         const refCol = refSchema[ref.field];
         if (!refCol) {
@@ -100,7 +102,7 @@ module.exports = class CDelta {
           //TODO show duplicates?
           tableIndex[key] = pair.sys_id;
         }
-        this.log(`merge: indexed #${pairs.length} "${refTable}" mappings`);
+        log(`merge: indexed #${pairs.length} "${refTable}" mappings`);
         referenceIndex[refTable] = tableIndex;
       }
       //look at incoming data and swap out the appropriate values
@@ -117,7 +119,7 @@ module.exports = class CDelta {
             const sysId = tableIndex[value];
             value = sysId; //swap
           } else {
-            this.log(`merge: "${refTable}" index is missing "${value}"`);
+            log(`merge: "${refTable}" index is missing "${value}"`);
             value = null;
           }
           row[colName] = value;
@@ -172,19 +174,18 @@ module.exports = class CDelta {
         processedRows[type].push(snRow);
       }
       if (missing.size > 0) {
-        status.warn(`found #${missing.size} ${type} rows with no primary key`);
+        warn(`found #${missing.size} ${type} rows with no primary key`);
       }
       if (duplicatePks.size > 0) {
-        let action = "ignoring";
         if (allowDeletes && type === "existing") {
-          action = "deleting";
+          warn(`deleting #${duplicatePks.size} ${type} duplicate rows`);
+        } else {
+          log(`ignoring #${duplicatePks.size} ${type} duplicate rows`);
         }
-        status.warn(`${action} #${duplicatePks.size} ${type} duplicate rows`);
       }
     }
-    status.log(
+    log(
       `delta merging #${processedRows.incoming.length} ` +
-        `entries into ${tableName}, ` +
         `found #${processedRows.existing.length} existing entries`
     );
     let rowsMatched = 0;
@@ -225,7 +226,7 @@ module.exports = class CDelta {
       for (let k in incomingRow) {
         //check this column is actually in the schema
         if (!(k in schema)) {
-          status.warn(`Found undefined column "${k}"`);
+          warn(`Found undefined column "${k}"`);
           continue;
         }
         let incomingVal = incomingRow[k];
@@ -299,7 +300,7 @@ module.exports = class CDelta {
       }
     }
     if (msg.length === 0) {
-      status.log(`No changes`);
+      log(`No changes`);
       return {
         rowsMatched,
         rowsCreated: 0,
@@ -307,7 +308,7 @@ module.exports = class CDelta {
         rowsDeleted: 0
       };
     }
-    status.log(msg.join(", "));
+    log(msg.join(", "));
     status.add(
       pending.create.length + pending.update.length + pending.delete.length
     );
@@ -316,7 +317,7 @@ module.exports = class CDelta {
     //try-catch to ensure we always re-activate data policy
     try {
       //create all
-      status.log(`creating #${pending.create.length}`);
+      log(`creating #${pending.create.length}`);
       await sync.each(API_CONCURRENCY, pending.create, async row => {
         //perform creation
         await this.client.create(tableName, row);
@@ -324,7 +325,7 @@ module.exports = class CDelta {
         status.done();
       });
       //update all
-      status.log(`updating #${pending.update.length}`);
+      log(`updating #${pending.update.length}`);
       await sync.each(API_CONCURRENCY, pending.update, async row => {
         //perform update
         await this.client.update(tableName, row);
@@ -332,7 +333,7 @@ module.exports = class CDelta {
         status.done();
       });
       //delete all
-      status.log(`deleting #${pending.delete.length}`);
+      log(`deleting #${pending.delete.length}`);
       await sync.each(API_CONCURRENCY, pending.delete, async row => {
         //perform deletion
         if (allowDeletes) {
