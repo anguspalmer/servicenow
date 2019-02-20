@@ -383,8 +383,14 @@ module.exports = class ServiceNowClient {
       if (fields.length > 0 || query) {
         cacheKey += `-${md5(JSON.stringify([fields, query]))}`;
       }
+      //convert modified-time into a snow date
       const mtime = snowDate(await recordCache.mtime(cacheKey));
-      const data = mtime ? await recordCache.get(cacheKey) : null;
+      const isCached = Boolean(mtime);
+      const cacheExpiry = "3d";
+      //pull data from cache if its less than 3 days old
+      const data = isCached
+        ? await recordCache.get(cacheKey, cacheExpiry)
+        : null;
       //have cached rows!
       if (Array.isArray(data)) {
         const q = [];
@@ -402,11 +408,12 @@ module.exports = class ServiceNowClient {
             q.concat(`sys_updated_on<=${mtime}`).join("^")
           );
           //none have changed since cache time, safe to use
+          //CAVEAT: not safe to use if schema has changed!
           if (updatedBefore === data.length) {
             logger.log(`Read cache: ${cacheKey}`);
             //JSON cannot store date objects, so we must convert all
             //date columns from strings into Dates.
-            //TODO: @jpillora: 'data' should also contain schema!
+            //TODO: FIX: @jpillora: 'data' should also contain hash of schema!
             const s = await this.schema.get(tableName);
             const dates = [];
             for (let k in s) {
