@@ -448,8 +448,11 @@ module.exports = class ServiceNowClient {
     if (query) {
       params.sysparm_query = query;
     }
-    const limit = 500;
-    const totalPages = Math.ceil(count / limit);
+    const maxRecords = opts.maxRecords
+      ? Math.min(count, opts.maxRecords)
+      : count;
+    const pageSize = Math.min(maxRecords, opts.pageSize ? opts.pageSize : 500);
+    const totalPages = Math.ceil(maxRecords / pageSize);
     if (status && status.add) {
       status.add(totalPages);
     }
@@ -464,8 +467,8 @@ module.exports = class ServiceNowClient {
         url: `/v2/table/${tableName}`,
         params: {
           ...params,
-          sysparm_limit: limit,
-          sysparm_offset: page * limit
+          sysparm_limit: pageSize,
+          sysparm_offset: page * pageSize
         }
       });
       if (status && status.done) {
