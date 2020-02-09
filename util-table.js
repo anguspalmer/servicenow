@@ -53,6 +53,9 @@ exports.expandColumn = col => {
       default_length = 4000;
       col.type = "string";
       break;
+    case "html":
+      default_length = 4000;
+      break;
     case "url":
     case "string":
       default_length = 255;

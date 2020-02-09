@@ -150,10 +150,14 @@ module.exports = class CSchema {
         }
       } else if (t === "integer") {
         let i = parseInt(v, 10);
-        if (isNaN(i)) {
+        if (!isNaN(i)) {
+          v = i;
+        } else if (isNaN(i) && !s.choice_list) {
+          // if using sysparm_display_value = true then
+          // choice lists will always be Strings. So ignore
+          // the field type if it can't be parsed to int
           throw `Invalid integer "${v}"`;
         }
-        v = i;
       } else if (t === "float" || t === "decimal") {
         //will either have up to 7 or 2 decimal places
         let i = parseFloat(v, 10);

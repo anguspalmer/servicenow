@@ -127,14 +127,14 @@ module.exports = class ServiceNowClient {
     //validate URL (must use versioned api)
     let hasData = Boolean(request.data);
     let isXML = /\.do\b/.test(url);
-    let isValidJSONURL = /\/v\d\/(import|table|stats|attachment)\/(\w+)(\/(\w+))?$/.test(
+    let isValidJSONURL = /\/v\d\/(import|table|stats|attachment)(\/(\w+))?(\/(\w+))?$/.test(
       url
     );
     let apiType = RegExp.$1;
     let tableAPI = apiType === "table";
     let importAPI = apiType === "import";
-    let tableName = RegExp.$2;
-    let sysID = RegExp.$4;
+    let tableName = RegExp.$3;
+    let sysID = RegExp.$5;
     //validate inputs
     if (sysID && !isGUID(sysID)) {
       throw `Invalid URL sys_id`;
@@ -190,7 +190,7 @@ module.exports = class ServiceNowClient {
           respErr = err.toString();
           this.debug(`FAILED: do: ${method} ${url}`, respErr);
           //tcp disconnected, retry
-          if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN") {
+          if (err.code === "ECONNRESET" || err.code === "EAI_AGAIN" || err.code ==='ETIMEDOUT') {
             retry = true;
           }
         }
