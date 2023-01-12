@@ -32,15 +32,15 @@ const CTable = require("./client-table");
  * let snc = new ServiceNowClient({
  *   user: "foo",
  *   pass: "bar",
- *   instance: "ac3dev"
+ *   instance: "dev"
  * });
- * let results = await snc.get("u_commvault_products")
+ * let results = await snc.get("cmdb_ci_server")
  */
 module.exports = class ServiceNowClient {
   constructor(config) {
     //validate config
     let { username, password, instance } = config;
-    let fake = instance === "ac3dev" && (!username || !password);
+    let fake = instance === "dev" && (!username || !password);
     if (fake) {
       this.log(
         `No auth and environment is ${instance}, ServiceNow API will be faked.`
@@ -133,8 +133,12 @@ module.exports = class ServiceNowClient {
     let apiType = RegExp.$1;
     let tableAPI = apiType === "table";
     let importAPI = apiType === "import";
+    let attachmentAPI = apiType === "attachment";
     let tableName = RegExp.$3;
     let sysID = RegExp.$5;
+    const isFile = attachmentAPI && sysID === "file"
+    if (isFile) sysID = RegExp.$3;
+
     //validate inputs
     if (sysID && !isGUID(sysID)) {
       throw `Invalid URL sys_id`;
@@ -143,8 +147,8 @@ module.exports = class ServiceNowClient {
       throw `Expected sys ID in URL`;
     }
     let isArray = !sysID;
-    let isJSON = !isXML;
-    if (isJSON && !isValidJSONURL) {
+    let isJSON = !isXML && !isFile;
+    if ((isJSON || isFile) && !isValidJSONURL) {
       throw `Invalid URL`;
     }
     if (importAPI && !/^u_imp_dm_/.test(tableName)) {
@@ -174,7 +178,7 @@ module.exports = class ServiceNowClient {
         let d = backoff.duration();
         await sync.sleep(d);
       }
-      //perform HTTP request, determine if we can rety
+      //perform HTTP request, determine if we can retry
       let retry = false;
       const bucket = isRead ? this.readBucket : this.writeBucket;
       await bucket.run(async () => {
@@ -230,6 +234,8 @@ module.exports = class ServiceNowClient {
     } else if (isJSON && !contentType.startsWith("application/json")) {
       throw `Expected JSON (got ${contentType})`;
     }
+    if (isFile) return data;
+
     //auto-parse xml
     if (isXML) {
       data = await parseXML(data);

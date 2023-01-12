@@ -6,9 +6,9 @@
   "dependencies": {
     "axios": "^0.18.0",
     "backo": "^1.1.0",
-    "cache": "git+ssh://git@git.ac3.com.au:7999/node/cache.git",
+    "cache": "git+https://github.com/anguspalmer/cache.git",
     "lodash.isequal": "^4.5.0",
-    "sync": "git+ssh://git@git.ac3.com.au:7999/node/sync.git",
+    "sync": "git+https://github.com/anguspalmer/sync.git",
     "xml2js": "^0.4.19"
   }
 }

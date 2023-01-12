@@ -166,11 +166,24 @@ module.exports = class CSchema {
         }
         v = i;
       } else if (t === "glide_date_time") {
-        if (!/^(\d\d\d\d-\d\d-\d\d) (\d\d:\d\d:\d\d)$/.test(v)) {
+        let d;
+        let time, yyyy, mm, dd;
+        //display=false implies UTC dates
+        if (/^(\d\d\d\d)-(\d\d)-(\d\d) (\d\d:\d\d:\d\d)$/.test(v)) {
+          yyyy = RegExp.$1;
+          mm = RegExp.$2;
+          dd = RegExp.$3;
+          time = RegExp.$4
+        //display=true dates in local format
+        }else if (/^(\d\d)-(\d\d)-(\d\d\d\d) (\d\d:\d\d:\d\d)$/.test(v)) {
+          dd = RegExp.$1;
+          mm = RegExp.$2;
+          yyyy = RegExp.$3;
+          time = RegExp.$4
+        }else{
           throw `Unexpected date format "${v}"`;
         }
-        //display=false implies UTC dates?
-        let d = new Date(`${RegExp.$1}T${RegExp.$2}Z`);
+        d = new Date(`${yyyy}-${mm}-${dd}T${time}Z`);
         if (isNaN(d)) {
           throw `Invalid date "${v}"`;
         }

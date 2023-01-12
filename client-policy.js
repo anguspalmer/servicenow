@@ -76,7 +76,7 @@ module.exports = class CPolicy {
       ...policyDefaults,
       [policyTableRef]: tableName,
       conditions: `sys_created_by=${this.client.username}^EQ`,
-      short_description: `(AC3) DataMart auto-generated ${type} policy`,
+      short_description: `Auto-generated ${type} policy`,
       inherit: false
     };
     //missing? create it
